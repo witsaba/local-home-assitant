@@ -1,0 +1,37 @@
+esp-idf/esp_rom/CMakeFiles/__idf_esp_rom.dir/patches/esp_rom_efuse.c.obj: \
+ /Users/braejan/.espressif/v5.5.3/esp-idf/components/esp_rom/patches/esp_rom_efuse.c \
+ /Users/braejan/.espressif/v5.5.3/esp-idf/components/soc/esp32/include/soc/soc.h \
+ /Users/braejan/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20251107/xtensa-esp-elf/lib/gcc/xtensa-esp-elf/14.2.0/include/stdint.h \
+ /Users/braejan/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20251107/xtensa-esp-elf/xtensa-esp-elf/include/stdint.h \
+ /Users/braejan/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20251107/xtensa-esp-elf/xtensa-esp-elf/include/machine/_default_types.h \
+ /Users/braejan/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20251107/xtensa-esp-elf/xtensa-esp-elf/include/sys/features.h \
+ /Users/braejan/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20251107/xtensa-esp-elf/xtensa-esp-elf/include/_newlib_version.h \
+ /Users/braejan/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20251107/xtensa-esp-elf/xtensa-esp-elf/include/sys/_intsup.h \
+ /Users/braejan/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20251107/xtensa-esp-elf/xtensa-esp-elf/include/sys/_stdint.h \
+ /Users/braejan/.espressif/v5.5.3/esp-idf/components/esp_common/include/esp_assert.h \
+ /Users/braejan/.espressif/v5.5.3/esp-idf/components/newlib/platform_include/assert.h \
+ /Users/braejan/workspace/witsaba/repositories/local-home-assitant/esp-idf-camera-project/embedded/iot_cams/build/bootloader/config/sdkconfig.h \
+ /Users/braejan/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20251107/xtensa-esp-elf/xtensa-esp-elf/include/stdlib.h \
+ /Users/braejan/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20251107/xtensa-esp-elf/xtensa-esp-elf/include/machine/ieeefp.h \
+ /Users/braejan/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20251107/xtensa-esp-elf/xtensa-esp-elf/include/_ansi.h \
+ /Users/braejan/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20251107/xtensa-esp-elf/xtensa-esp-elf/include/newlib.h \
+ /Users/braejan/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20251107/xtensa-esp-elf/xtensa-esp-elf/include/sys/config.h \
+ /Users/braejan/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20251107/xtensa-esp-elf/lib/gcc/xtensa-esp-elf/14.2.0/include/stddef.h \
+ /Users/braejan/.espressif/v5.5.3/esp-idf/components/newlib/platform_include/sys/reent.h \
+ /Users/braejan/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20251107/xtensa-esp-elf/xtensa-esp-elf/include/sys/reent.h \
+ /Users/braejan/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20251107/xtensa-esp-elf/xtensa-esp-elf/include/_ansi.h \
+ /Users/braejan/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20251107/xtensa-esp-elf/xtensa-esp-elf/include/sys/_types.h \
+ /Users/braejan/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20251107/xtensa-esp-elf/xtensa-esp-elf/include/machine/_types.h \
+ /Users/braejan/.espressif/v5.5.3/esp-idf/components/newlib/platform_include/sys/lock.h \
+ /Users/braejan/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20251107/xtensa-esp-elf/xtensa-esp-elf/include/sys/lock.h \
+ /Users/braejan/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20251107/xtensa-esp-elf/xtensa-esp-elf/include/sys/cdefs.h \
+ /Users/braejan/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20251107/xtensa-esp-elf/xtensa-esp-elf/include/machine/stdlib.h \
+ /Users/braejan/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20251107/xtensa-esp-elf/xtensa-esp-elf/include/alloca.h \
+ /Users/braejan/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20251107/xtensa-esp-elf/xtensa-esp-elf/include/sys/_locale.h \
+ /Users/braejan/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20251107/xtensa-esp-elf/xtensa-esp-elf/include/assert.h \
+ /Users/braejan/.espressif/v5.5.3/esp-idf/components/soc/esp32/include/soc/soc_caps.h \
+ /Users/braejan/.espressif/v5.5.3/esp-idf/components/soc/esp32/include/soc/interrupts.h \
+ /Users/braejan/.espressif/v5.5.3/esp-idf/components/esp_common/include/esp_bit_defs.h \
+ /Users/braejan/.espressif/v5.5.3/esp-idf/components/soc/esp32/register/soc/reg_base.h \
+ /Users/braejan/.espressif/v5.5.3/esp-idf/components/soc/esp32/register/soc/efuse_reg.h \
+ /Users/braejan/.espressif/v5.5.3/esp-idf/components/soc/esp32/include/soc/efuse_defs.h

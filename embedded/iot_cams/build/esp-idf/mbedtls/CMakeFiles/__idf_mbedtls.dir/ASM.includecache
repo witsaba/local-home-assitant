@@ -1,0 +1,10 @@
+#IncludeRegexLine: ^[ 	]*[#%][ 	]*(include|import)[ 	]*[<"]([^">]+)([">])
+
+#IncludeRegexScan: ^.*$
+
+#IncludeRegexComplain: ^$
+
+#IncludeRegexTransform: 
+
+/Users/braejan/workspace/witsaba/repositories/local-home-assitant/esp-idf-camera-project/embedded/iot_cams/build/x509_crt_bundle.S
+
