@@ -137,6 +137,22 @@ void provisioning_stop(void);
  * factory-reset flow. */
 esp_err_t provisioning_reset_credentials(void);
 
+/* Bring up the wifi subsystem in STA-only mode (no softAP) and
+ * trigger a station connect using the credentials already in NVS.
+ * Used on already-provisioned boots where provisioning_run() is
+ * skipped and the wifi stack has never been started.
+ *
+ * Idempotent: safe to call more than once per boot. The IP event
+ * handler (logs station connected to "<ssid>": ip=...) is registered
+ * here so the same log line fires on every attach — first provision,
+ * every subsequent reboot, and any transient reconnect.
+ *
+ * Returns ESP_OK on success, or the underlying esp_err_t on
+ * bring-up failure. ESP_ERR_WIFI_CONN is treated as success
+ * (the driver is already mid-connect — the caller can still
+ * wait on IP_EVENT_STA_GOT_IP). */
+esp_err_t provisioning_join_ap(void);
+
 /* Inter-module helper that the captive portal's POST handler
  * calls with the operator's form input. Persists the credentials
  * via esp_wifi_set_config() and signals provisioning_run() to

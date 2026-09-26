@@ -75,34 +75,25 @@ static void ip_handler(void *arg, esp_event_base_t ev_base,
     xEventGroupSetBits(ev, GOT_IP_BIT);
 }
 
-/* Wait up to 30 s for the station to associate and receive a DHCP
- * lease from the home AP, then log the assigned IPv4 address.
+/* Wait up to 30 s for the station to receive a DHCP lease from the
+ * home AP, then log the assigned IPv4 address.
  *
- * On a first-boot provision this is called after provisioning_run()
- * returns and before the softAP is torn down. On a subsequent boot
- * it is called instead of provisioning_run().
+ * IMPORTANT: does NOT call esp_wifi_connect(). The caller is
+ * responsible for triggering the station attach before calling this:
+ *   - post-provisioning path: provisioning_apply_captive_form()
+ *     already called esp_wifi_connect() when the form posted.
+ *   - already-provisioned path: provisioning_join_ap() does it.
+ *
+ * Calling esp_wifi_connect() here would race with the in-flight
+ * connect from the form handler (the wifi driver returns
+ * ESP_ERR_WIFI_CONN and prints "sta is connecting, return error"
+ * in the log). Each path triggers the connect exactly once.
  *
  * The wifi driver and event loop run on their own tasks; we just
  * need this task alive so esp_event_loop_run() keeps dispatching
  * events to our handler. */
 static void wait_for_sta_ip_and_log(const char *label)
 {
-    esp_err_t r;
-
-    /* Ensure the station netif is attached to the event loop. */
-    esp_netif_t *sta_netif = esp_netif_get_default_netif();
-    if (!sta_netif) {
-        ESP_LOGW(TAG, "%s: no default netif — creating sta", label);
-        sta_netif = esp_netif_create_default_wifi_sta();
-    }
-
-    ESP_LOGI(TAG, "%s: triggering station connect", label);
-    r = esp_wifi_connect();
-    if (r != ESP_OK && r != ESP_ERR_WIFI_CONN) {
-        ESP_LOGW(TAG, "%s: esp_wifi_connect: %s", label,
-                 esp_err_to_name(r));
-    }
-
     /* Register a one-shot IP handler and block until it fires. */
     StaticEventGroup_t ev_group_buf = {0};
     EventGroupHandle_t ev_group = xEventGroupCreateStatic(&ev_group_buf);
@@ -150,10 +141,18 @@ void app_main(void)
 
     if (provisioning_is_provisioned()) {
         /* Credentials exist in NVS from a previous provisioning session.
-         * Trigger the station to associate and wait for the DHCP lease
-         * so we can log the assigned IP. The softAP is never started
-         * on this path (provisioning_run is skipped). */
+         * Bring up wifi in STA-only mode and trigger a connect, then
+         * wait for the DHCP lease so we can log the assigned IP. The
+         * softAP is never started on this path (provisioning_run is
+         * skipped). provisioning_join_ap() handles the wifi init +
+         * esp_wifi_connect() so we don't race with anyone. */
         ESP_LOGI(TAG, "credentials present in NVS — joining home AP");
+        r = provisioning_join_ap();
+        if (r != ESP_OK) {
+            ESP_LOGE(TAG, "provisioning_join_ap failed: %s",
+                     esp_err_to_name(r));
+            return;
+        }
         wait_for_sta_ip_and_log("already-provisioned");
         ESP_LOGI(TAG, "entering supervisor loop");
         while (1) {
@@ -171,7 +170,10 @@ void app_main(void)
     /* Provisioning succeeded. Credentials are committed to NVS.
      * The station already attempted to connect when the captive form
      * called esp_wifi_connect() inside provisioning_apply_captive_form().
-     * Wait for the DHCP lease to arrive and log the assigned IP. */
+     * We MUST NOT call esp_wifi_connect() again here — the driver
+     * returns ESP_ERR_WIFI_CONN ("sta is connecting, return error")
+     * because the previous connect is still in flight. Just wait
+     * for the DHCP lease to arrive. */
     wait_for_sta_ip_and_log("post-provisioning");
 
     /* Shutdown the softAP. The operator's phone was already

@@ -411,6 +411,85 @@ esp_err_t provisioning_reset_credentials(void)
     return ESP_OK;
 }
 
+esp_err_t provisioning_join_ap(void)
+{
+    if (!s_prov.initialized) {
+        ESP_LOGE(TAG, "join_ap: not initialized");
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (!provisioning_is_provisioned()) {
+        ESP_LOGE(TAG, "join_ap: no credentials in NVS");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    esp_err_t r;
+
+    /* Idempotent netif + event loop init. ESP_ERR_INVALID_STATE
+     * is acceptable — means already initialized. */
+    r = esp_netif_init();
+    if (r != ESP_OK && r != ESP_ERR_INVALID_STATE) {
+        ESP_LOGE(TAG, "join_ap: esp_netif_init: %s", esp_err_to_name(r));
+        return r;
+    }
+    r = esp_event_loop_create_default();
+    if (r != ESP_OK && r != ESP_ERR_INVALID_STATE) {
+        ESP_LOGE(TAG, "join_ap: esp_event_loop_create_default: %s",
+                 esp_err_to_name(r));
+        return r;
+    }
+
+    /* Register the permanent IP event handler so the
+     * `station connected to "<ssid>": ip=...` log fires on every
+     * subsequent attach (reboot, transient reconnect). Idempotent
+     * on repeat bring-ups. */
+    esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP,
+                                sta_got_ip_event_handler, NULL);
+
+    /* Station netif (not AP — we are STA-only here). */
+    esp_netif_t *sta_netif = esp_netif_create_default_wifi_sta();
+    if (sta_netif == NULL) {
+        ESP_LOGE(TAG, "join_ap: create_default_wifi_sta returned NULL");
+        return ESP_FAIL;
+    }
+    esp_netif_set_default_netif(sta_netif);
+
+    wifi_init_config_t wifi_init_cfg = WIFI_INIT_CONFIG_DEFAULT();
+    r = esp_wifi_init(&wifi_init_cfg);
+    if (r != ESP_OK && r != ESP_ERR_INVALID_STATE) {
+        ESP_LOGE(TAG, "join_ap: esp_wifi_init: %s", esp_err_to_name(r));
+        return r;
+    }
+
+    /* STA-only mode — no softAP. Used on already-provisioned
+     * boots where the operator never interacts with the device. */
+    r = esp_wifi_set_mode(WIFI_MODE_STA);
+    if (r != ESP_OK) {
+        ESP_LOGE(TAG, "join_ap: esp_wifi_set_mode(STA): %s",
+                 esp_err_to_name(r));
+        return r;
+    }
+    r = esp_wifi_start();
+    if (r != ESP_OK) {
+        ESP_LOGE(TAG, "join_ap: esp_wifi_start: %s", esp_err_to_name(r));
+        return r;
+    }
+
+    /* Trigger the station attach. The credentials are already in
+     * NVS (we checked above), so the driver will read them and
+     * associate with the home AP. ESP_ERR_WIFI_CONN means the
+     * driver is already mid-connect (e.g., from a previous
+     * provisioning_apply_captive_form() call) — treat as success. */
+    r = esp_wifi_connect();
+    if (r != ESP_OK && r != ESP_ERR_WIFI_CONN) {
+        ESP_LOGE(TAG, "join_ap: esp_wifi_connect: %s",
+                 esp_err_to_name(r));
+        return r;
+    }
+
+    ESP_LOGI(TAG, "join_ap: station connecting (credentials from NVS)");
+    return ESP_OK;
+}
+
 /* Called by the captive /provision handler when the operator's
  * form submission is accepted. Does the wifi config write and
  * signals the semaphore so provisioning_run() resumes. */
