@@ -144,9 +144,15 @@ void app_main(void)
 
     /* Re-issue esp_wifi_connect() in case the previous call from
      * provisioning_apply_captive_form() raced with teardown or the
-     * driver decided to defer the connect. */
+     * driver decided to defer the connect. ESP_ERR_WIFI_CONN means
+     * the station is already mid-connect (from the form's call) —
+     * not an error; the driver will keep retrying. */
     ESP_LOGI(TAG, "post-provisioning: triggering station connect");
-    esp_wifi_connect();
+    r = esp_wifi_connect();
+    if (r != ESP_OK && r != ESP_ERR_WIFI_CONN) {
+        ESP_LOGW(TAG, "post-provisioning: esp_wifi_connect: %s",
+                 esp_err_to_name(r));
+    }
 
     /* Register a blocking-wait handler for IP_EVENT_STA_GOT_IP.
      * We create a temporary event group so the handler can signal
@@ -158,10 +164,13 @@ void app_main(void)
     esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP,
                                post_prov_ip_handler, ev_group);
 
-    /* Wait up to 15 seconds for the DHCP lease. */
+    /* Wait up to 30 seconds for the DHCP lease. Home routers vary
+     * widely; 15 s was too tight for a slow DHCP responder. The
+     * softAP is still beaconing during this window so the phone's
+     * connection is unaffected. */
     EventBits_t bits = xEventGroupWaitBits(
         ev_group, GOT_IP_BIT, pdTRUE, pdFALSE,
-        pdMS_TO_TICKS(15000));
+        pdMS_TO_TICKS(30000));
 
     if (bits & GOT_IP_BIT) {
         ESP_LOGI(TAG, "post-provisioning: station DHCP lease acquired");
