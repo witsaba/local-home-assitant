@@ -81,7 +81,14 @@ typedef struct {
 
 /* Application-level identity exposed on the optional
  * `iot-cam-info` custom protocomm endpoint. NULL fields are
- * serialized as empty strings. */
+ * serialized as empty strings.
+ *
+ * Lifetime: the package stores the pointers verbatim. They must
+ * outlive the underlying provisioning session. String literals
+ * are safe; stack-locals from app_main are also safe because
+ * app_main stays blocked in provisioning_run() for the lifetime
+ * of the session. Heap strings require the caller to keep them
+ * alive for as long as provisioning could be re-entered. */
 typedef struct {
     const char *name;
     const char *fw_version;

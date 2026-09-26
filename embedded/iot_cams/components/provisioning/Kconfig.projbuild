@@ -10,15 +10,13 @@
 
 menu "WiFi Provisioning"
 
-    config PROVISIONING_SECURITY
-        int "Security version (0 = plain, 1 = X25519 + AES-CTR)"
-        default 1
-        range 0 1
-        help
-            Security 1 is the only production-grade option — X25519
-            key exchange with proof-of-possession (PoP) and AES-CTR
-            for session encryption. Security 0 is plain text and
-            exists for debugging only; never ship it.
+    comment
+        The security version is configured at runtime via
+        provisioning_config_t::security (defaults to
+        PROV_SECURITY_1). Build-time Kconfig controls live under
+        the IDF Component config -> ESP PROTOCOMM menu and gate
+        which security versions protocomm actually compiles in.
+    endcomment
 
     config PROVISIONING_POP
         string "Default proof-of-possession"

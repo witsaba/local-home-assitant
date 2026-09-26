@@ -38,7 +38,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <inttypes.h>
+#include <stdint.h>
 
 #include "esp_log.h"
 #include "esp_event.h"
@@ -184,11 +184,14 @@ static void softap_event_handler(void *arg, esp_event_base_t event_base,
             break;
         case WIFI_PROV_CRED_RECV: {
             wifi_sta_config_t *wifi_sta_cfg = (wifi_sta_config_t *)event_data;
+            /* Avoid printing the password in clear text — the
+             * IDF example does it for debugging but we are
+             * aiming for a production-grade log surface. */
             ESP_LOGI(TAG, "Received Wi-Fi credentials"
                          "  SSID     : %s"
-                         "  Password : %s",
+                         "  Password : (redacted, len=%d)",
                      (const char *)wifi_sta_cfg->ssid,
-                     (const char *)wifi_sta_cfg->password);
+                     (int)strlen((const char *)wifi_sta_cfg->password));
             break;
         }
         case WIFI_PROV_CRED_FAIL: {
@@ -375,10 +378,12 @@ esp_err_t provisioning_run(void)
     }
 
     /* Initialize the manager AFTER bring-up. Both event handlers
-     * are zero-init'd → no app-level events besides our own. */
+     * are zero-init'd → no app-level events besides our own. The
+     * SoftAP scheme has no scheme-specific handler macros in IDF
+     * v5.5 (only BLE does); pass WIFI_PROV_EVENT_HANDLER_NONE. */
     wifi_prov_mgr_config_t mgr_cfg = {
         .scheme               = wifi_prov_scheme_softap,
-        .scheme_event_handler = WIFI_PROV_SCHEME_SOFTAP_EVENT_HANDLER_NONE,
+        .scheme_event_handler = WIFI_PROV_EVENT_HANDLER_NONE,
     };
     r = wifi_prov_mgr_init(mgr_cfg);
     if (r != ESP_OK) {
