@@ -28,34 +28,31 @@ CONFIG_ESPTOOLPY_FLASHMODE_DIO=y
 #
 # Mirrors `components/provisioning/Kconfig.projbuild`. With
 # these set, a fresh checkout + flash puts the device into a
-# softAP at `IoT-Cam_3091B0` (WPA2 passphrase / PoP from
-# `abcd1234`), bypassing a menuconfig session. The phone-app
-# operator must still type the passphrase + PoP on first
-# join.
+# softAP at `IoT-Cam_3091B0` (WPA2 passphrase from
+# CONFIG_PROVISIONING_SOFTAP_PASS). The operator joins the
+# softAP, opens http://192.168.4.1/ in a browser, and submits
+# their home Wi-Fi credentials through an HTML form.
 #
 # Both `abcd1234` defaults are PLACEHOLDERS. Ship-time
-# packaging must replace them with per-fleet values (per
-# batch or per device) so a single batch of provisioning
-# credentials can't cycle onto a second batch of devices.
-CONFIG_PROVISIONING_POP="abcd1234"
+# packaging must replace them with per-fleet values.
 CONFIG_PROVISIONING_SOFTAP_PASS="abcd1234"
 CONFIG_PROVISIONING_SERVICE_NAME_PREFIX="IoT-Cam"
 CONFIG_PROVISIONING_DEVICE_NAME="iot-cam"
 
+# Kept for the api's `pop` field. The captive flow does not
+# prompt for a PoP (the WPA2 passphrase is the operator-visible
+# security boundary). Future revisions may drop this.
+CONFIG_PROVISIONING_POP="abcd1234"
+
 # === Protocomm security model ===
 #
-# Security 1 (X25519 + PoP + AES-CTR) is the production target
-# and is the value the `provisioning_config_t::security`
-# default of PROV_SECURITY_1 maps to. We pin it here so a
-# menuconfig fiddler can't accidentally leave the firmware
-# with no security versions compiled in (the IDF default
-# enables all three, but the choice isn't enforced).
-#
-# Security 0 (plaintext, debug-only) and Security 2 (SRP6a,
-# needs a sibling component to wire up) are intentionally
-# not addressed here — both default OFF once V1 is the only
-# "select" target.
-CONFIG_ESP_PROTOCOMM_SUPPORT_SECURITY_VERSION_1=y
+# The captive portal does NOT use the IDF wifi_provisioning
+# / protocomm manager, so these symbols are no longer
+# pinned by the provisioning component. They are kept as a
+# marker that the build resolves them only if a sibling
+# component imports the relevant code paths. Leave them
+# at the IDF default.
+# CONFIG_ESP_PROTOCOMM_SUPPORT_SECURITY_VERSION_1=y
 
 # === Default partition table ===
 #

@@ -9,17 +9,20 @@
 # REQUIRES — pulls IDF's vendored components so the build graph is
 # complete:
 #   - esp_wifi / esp_netif / esp_event — base radio + TCP/IP stack
-#     + event loop dependencies of wifi_provisioning
-#   - nvs_flash  — credential persistence
-#   - mdns       — required by SoftAP scheme for service discovery
-#     (must be initialized before start_provisioning)
-#   - protocomm  — underlies all wifi_provisioning security modes
-#   - wifi_provisioning — the manager we wrap
+#     + event loop, needed by the softAP bring-up
+#   - nvs_flash  — credential persistence (esp_wifi_set_config)
+#   - mdns       — captive portal's service advertising
+#   - esp_http_server — captive portal's GET /, /whoami, /provision
+#     handlers
+#   - json       — JSON /whoami response payload
 #
-# Sources include/provisioning.h is the only public surface; the
-# linked IDF symbols live in the .a libraries IDF already builds.
+# protocomm and wifi_provisioning are NO LONGER linked because
+# the captive portal flow talks to esp_wifi directly without the
+# manager layer (replaced after the shared-httpd crash on the
+# device flash session).
 idf_component_register(
     SRCS "src/provisioning.c"
+         "src/captive_portal.c"
     INCLUDE_DIRS "include"
-    REQUIRES esp_wifi esp_netif esp_event nvs_flash mdns protocomm wifi_provisioning
+    REQUIRES esp_wifi esp_netif esp_event nvs_flash mdns esp_http_server json
 )

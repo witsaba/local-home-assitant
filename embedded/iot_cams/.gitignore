@@ -7,3 +7,4 @@ sdkconfig
 # over-per-developer, remove this line and commit the lock.
 dependencies.lock
 embedded/iot_cams/managed_components/
+managed_components/

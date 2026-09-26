@@ -97,6 +97,71 @@ for greppability.
   - Local `cmake --version` availability check (the docker/cross compile is not available in this sandbox; we validate by reading-compiling the headers, checking the project's `idf.py` configuration is consistent, and reviewing the linker surface).
   - Work-unit commit: `chore(provisioning): final integration review notes`.
 
+## Closed by the work on the chip (commits in this branch)
+
+- [x] **T1 — Scaffold provisioning component skeleton**
+- [x] **T2 — Provisioning core (init / is_provisioned / run / stop)**
+- [x] **T3 — Credentials persistence + reset**
+- [x] **T4 — Custom endpoint iot-cam-info**
+- [x] **T5 — Wire into iot_cams main firmware**
+- [x] **T6 — Documentation**
+- [x] **T7 — Final integration smoke**
+- [x] **T8 — Managed dep for mdns (ESP-IDF v5.5.x migration)**
+- [x] **T9 — NVS init on the package's responsibility**
+- [x] **T10 — SoftAP passphrase is build-time configurable**
+- [x] **T11 — sdkconfig.defaults for the project floor**
+
+## Follow-ups added after the device-flash session (Sep 26 2026)
+
+The deployment environment is offline / private-network only — the
+operator cannot rely on downloading the Espressif SoftAP provisioning
+phone app at install time. The provisioning must work entirely from
+the operator's mobile browser with no app install. This needs a
+captive-portal HTML form inside the package, alongside (not
+replacing) the existing protocomm path.
+
+- [ ] **T12 — Captive-portal HTML form on the softAP**
+  - New file `src/captive_portal.c` + header `include/captive_portal.h`.
+  - Bring up a second httpd server (or share the manager's via
+    `wifi_prov_scheme_softap_set_httpd_handle()`) and register:
+    - `GET /` — minimal mobile-first HTML form (SSID + password)
+    - `POST /provision` — form-urlencoded body parser, calls
+      `wifi_prov_mgr_configure_sta()` to apply credentials.
+    - `GET /whoami` — JSON device identity (replaces the
+      protocomm `iot-cam-info` endpoint in captive mode).
+    - default handler — any unmatched GET returns the form so
+      naive captive-portal probes trigger UI.
+  - The WPA2 passphrase is the security gate; security-1 PoP
+    stays out of the captive-portal HTML flow (the radio link
+    encryption is sufficient for a private-network deployment).
+  - Work-unit commit: `feat(provisioning): captive-portal HTML form for offline deployments`.
+
+- [ ] **T13 — Kconfig + sdkconfig.defaults default to captive**
+  - Add `CONFIG_PROVISIONING_USE_CAPTIVE_PORTAL` (default `y` in
+    sdkconfig.defaults). When set, the manager's protocomm URI
+    set is registered on the captive httpd handle, so the
+    security-1 path stays available for advanced operators while
+    the HTML form is the default UX.
+  - Update `Kconfig.projbuild` + `sdkconfig.defaults` accordingly.
+  - Work-unit commit: `chore(provisioning): Kconfig-gate captive-portal mode, default on`.
+
+- [ ] **T14 — README updates for the new UX flow**
+  - Bring-up flow diagram simplified: show GET/POST URIs the
+    captive form uses.
+  - "Operator procedure" subsection: connect → open browser → submit.
+  - Document the WPA2 passphrase as the operator-visible
+    security boundary in captive mode (no PoP prompt).
+  - Work-unit commit: `docs(provisioning): document captive-portal operator flow`.
+
+- [ ] **T15 — Hardware verification on the chip**
+  - Connect a phone to `IoT-Cam_xxXXxx`, navigate to
+    `http://192.168.4.1/`, submit credentials for the local
+    AP, verify the device joins and reaches the post-provisioning
+    state. Document any captive-portal-detection quirks (e.g.
+    phone requires typed URL vs auto-redirect).
+  - Work-unit commit: `test(provisioning): device-flash verification of captive-portal flow`.
+  - This is the acceptance test for the whole branch.
+
 ## Out of scope (follow-ups, not part of this branch)
 
 - A full `config` component with `identity`, `camera`, `control` fields.

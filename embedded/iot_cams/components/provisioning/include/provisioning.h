@@ -137,6 +137,15 @@ void provisioning_stop(void);
  * factory-reset flow. */
 esp_err_t provisioning_reset_credentials(void);
 
+/* Inter-module helper that the captive portal's POST handler
+ * calls with the operator's form input. Persists the credentials
+ * via esp_wifi_set_config() and signals provisioning_run() to
+ * unblock. Caller in captive_portal.c is the httpd worker thread;
+ * provisioning_run() is on the boot thread, synchronized
+ * through a FreeRTOS semaphore. */
+esp_err_t provisioning_apply_captive_form(const char *ssid,
+                                         const char *password);
+
 #ifdef __cplusplus
 }
 #endif

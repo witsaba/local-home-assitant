@@ -10,11 +10,12 @@
 
 menu "WiFi Provisioning"
 
-    # The security version is configured at runtime via
-    # provisioning_config_t::security (defaults to
-    # PROV_SECURITY_1). Build-time Kconfig controls live under
-    # the IDF Component config -> ESP PROTOCOMM menu and gate
-    # which security versions protocomm actually compiles in.
+    # The provisioning security-version knob used to live here
+    # (with PROV_SECURITY_1 default) but was removed when the
+    # captive portal replaced the IDF wifi_provisioning manager
+    # on Sep 26. The WPA2 passphrase is now the operator-visible
+    # security boundary; the PoP arg of provisioning_init() is
+    # accepted for API stability but unused.
 
     config PROVISIONING_POP
         string "Default proof-of-possession"

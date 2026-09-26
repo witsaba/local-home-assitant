@@ -1,20 +1,24 @@
 # WiFi Provisioning for `iot_cams`
 
-A thin wrapper around ESP-IDF v5.5's `wifi_provisioning` manager.
-The package hides `protocomm`, `mdns`, `esp_wifi`, `esp_netif`,
-and `nvs_flash` from the rest of the firmware so `app_main` is
-three lines long.
+A self-contained WiFi provisioning package for the `iot_cams`
+firmware. Brings up a SoftAP, runs an httpd, and serves an
+HTML form the operator can fill in a phone browser to attach
+the device to their home Wi-Fi. No apps to install, no
+protocomm handshake, no internet access required during
+deployment.
 
-**Scope.** SoftAP transport only. Security 1 only (X25519 + PoP +
-AES-CTR). BLE transport and Security 2 are deliberately out of
-scope — see [Extending](#extending) below.
+**Scope.** SoftAP-only operator flow via a captive HTML form.
+The package talks to `esp_wifi` directly; the IDF
+`wifi_provisioning` / `protocomm` manager is intentionally
+not linked (see [Why no protocomm](#why-no-protocomm) below).
 
 ---
 
 ## Public surface
 
-`include/provisioning.h` exposes exactly five functions plus one
-struct pair:
+`include/provisioning.h` exposes five top-level functions plus a
+small inter-module helper that the captive portal's HTTP handler
+calls when the operator submits the form:
 
 ```c
 esp_err_t provisioning_init(const provisioning_config_t *cfg,
@@ -24,23 +28,57 @@ bool      provisioning_is_provisioned(void);
 
 esp_err_t provisioning_run(void);                  /* blocking */
 
-void      provisioning_stop(void);                 /* trigger teardown */
+void      provisioning_stop(void);                 /* unblock */
 
 esp_err_t provisioning_reset_credentials(void);    /* wipe NVS */
+
+esp_err_t provisioning_apply_captive_form(const char *ssid,
+                                         const char *password); /* inter-module */
 ```
 
 The header documents every error path. Application code includes
-only this file; every `esp_wifi_*` / `protocomm_*` symbol lives
-inside the package.
+only `provisioning.h`; the captive HTML form lives at the bottom of
+this README as a sibling-style flow.
 
 ---
 
-## Bring-up flow
+## Operator procedure (the only flow that matters)
+
+1. **Power on the device.** On first boot (or after a factory
+   reset) no Wi-Fi credentials are in NVS, so the package brings
+   up a softAP at `IoT-Cam_3091B0` (the suffix is the last 3 bytes
+   of the device's MAC).
+2. **From a phone, join the softAP** using the WPA2 passphrase
+   from `CONFIG_PROVISIONING_SOFTAP_PASS`. The operator sees a
+   captive-portal prompt from iOS/Android the moment the
+   connection completes; if not (some Androids don't pop it
+   without an actual probe URL), the operator navigates
+   manually to `http://192.168.4.1/`.
+3. **The HTML form appears.** The operator types the SSID and
+   WPA2 passphrase of the Wi-Fi they want the device to join
+   long-term, and submits.
+4. **The device persists those credentials** via
+   `esp_wifi_set_config()` and `provisioning_run()` returns. The
+   softAP stays up briefly so the operator's browser gets the
+   "Connected" confirmation; the application body that comes
+   after `provisioning_run()` drops the AP and the device
+   continues as a station.
+
+**Default credentials on the workbench.** SSID = `IoT-Cam_3091B0`,
+WPA2 passphrase = `abcd1234`. The `abcd1234` placeholder is in
+`CONFIG_PROVISIONING_SOFTAP_PASS`; ship-time packaging must replace
+both with per-fleet values.
+
+---
+
+## Bring-up sequence (firmware internals)
 
 ```
 app_main
   ├── provisioning_init(cfg, info)
-  ├── if (provisioning_is_provisioned())  → join AP, return
+  │     ├── nvs_flash_init() (idempotent on repeat calls)
+  │     └── store service_name + cfg
+  ├── if (provisioning_is_provisioned())  → return ESP_OK
   └── provisioning_run()  ── blocking
         ├── softap_bring_up()
         │     ├── esp_netif_init  (idempotent)
@@ -52,19 +90,53 @@ app_main
         │     ├── esp_wifi_start
         │     ├── mdns_init
         │     └── mdns_hostname_set
-        ├── wifi_prov_mgr_init(WIFI_PROV_SCHEME_SOFTAP, ...)
-        ├── esp_event_handler_register(WIFI_PROV_EVENT, ...)
-        ├── wifi_prov_mgr_endpoint_create("iot-cam-info")
-        ├── wifi_prov_mgr_start_provisioning(SECURITY_1, pop, ssid, "")
-        ├── wifi_prov_mgr_endpoint_register("iot-cam-info", handler, NULL)
-        └── wifi_prov_mgr_wait()  ── blocks until WIFI_PROV_END
+        ├── captive_portal_bring_up()  ── httpd on port 80
+        │     ├── httpd_start(&server, HTTPD_DEFAULT_CONFIG)
+        │     ├── httpd_register_uri_handler(/, GET)
+        │     ├── httpd_register_uri_handler(/provision, POST)
+        │     ├── httpd_register_uri_handler(/whoami, GET)
+        │     └── httpd_register_err_handler(HTTPD_404_NOT_FOUND, ...)
+        ├── xSemaphoreCreateBinary()  ── the unblock primitive
+        ├── xSemaphoreTake(...)  ── blocks on this thread
+        │
+        │  … operator browses to 192.168.4.1/ and submits the form …
+        │  captive_portal POST /provision parses form-urlencoded
+        │  body and calls provisioning_apply_captive_form(ssid, password)
+        │  which calls esp_wifi_set_config(WIFI_IF_STA) and signals
+        │  the semaphore.
+        │
+        ├── xSemaphoreTake returns
+        ├── captive_portal_tear_down()  ── httpd_stop
+        └── return ESP_OK (or ESP_FAIL if provisioning_stop was called)
 ```
 
-The ordering of `esp_netif_create_default_wifi_ap` relative to
-`esp_wifi_init` is intentional — IDF v5.5.3 returns
-`ESP_ERR_INVALID_STATE` if the order is reversed. The pattern
-above is the same one `examples/provisioning/wifi_prov_mgr` in
-the IDF tree uses.
+`esp_netif_create_default_wifi_ap` MUST run before `esp_wifi_init`
+in IDF v5.5.x — IDF returns `ESP_ERR_INVALID_STATE` if the order
+is reversed.
+
+---
+
+## Why no protocomm
+
+The project originally wrapped IDF's `wifi_provisioning` manager
+with the SoftAP scheme. That requires the operator to install the
+Espressif "ESP SoftAP Provisioning" phone app on their phone.
+The current deployment environment is offline / private-network
+only, so the operator cannot reliably download the app at install
+time.
+
+The captive-portal HTML form runs entirely off
+`httpd_register_uri_handler` + `esp_wifi_set_config`. The WPA2
+passphrase on the softAP link is the operator-visible security
+boundary; the security-1 PoP from the original IDF path is
+accepted on the `provisioning_init()` arg for API stability but
+ignored at runtime.
+
+Removing the IDF manager also dropped the shared-httpd
+`wifi_prov_scheme_softap_set_httpd_handle()` codepath, which
+LoadProhibited-crashed in `httpd_find_uri_handler` during
+the on-device verification pass. The simpler direct-API path
+side-steps that bug.
 
 ---
 
@@ -72,25 +144,22 @@ the IDF tree uses.
 
 | Setting | Default | Where it lives |
 | --- | --- | --- |
-| Transport | SoftAP + HTTP + mDNS | `wifi_prov_scheme_softap` |
-| Security | Security 1 (X25519 + PoP + AES-CTR) | Kconfig + per-call `cfg.security` |
-| PoP | `CONFIG_PROVISIONING_POP` | Kconfig |
+| Transport | SoftAP + HTTP + mDNS | inline `esp_wifi` + `esp_http_server` |
 | SoftAP WPA2 passphrase | `CONFIG_PROVISIONING_SOFTAP_PASS` (8–64 bytes) | Kconfig |
 | Service name | `"{prefix}_{MAC3}"` | derived in `derive_service_name()` |
+| Captive-form credentials (operator-typed) | run-time, no secret persisted on the device | `esp_wifi_set_config()` writes them to NVS |
 
-Security 0 (plain text) is exposed for debugging; never ship
-firmware with it enabled. Security 2 (SRP6a + AES-GCM) requires a
-managed-component extension and is intentionally out of scope.
+The WPA2 passphrase on the softAP is the only operator-visible
+security boundary in the captive-portal flow. It must be printed
+on the device label or in the install guide. The original
+security-1 PoP code path was removed when the IDF manager was
+dropped; the Kconfig `CONFIG_PROVISIONING_POP` is preserved for
+API compatibility but ignored at runtime.
 
-The phone-side provisioning app prompts the operator for the PoP
-during the security-1 handshake — make sure the PoP is printed on
-the device's label or in its installation guide.
-
-The phone first joins the device's softAP network (SSID
-`IoT-Cam_xxXXxx`, WPA2 passphrase from `CONFIG_PROVISIONING_SOFTAP_PASS`),
-then receives the security-1 challenge, then enters the PoP. The
-two credentials are separate on purpose — the passphrase gates the
-Wi-Fi link; the PoP gates the secure provisioning session on top.
+For deployments in hostile networks (or any place the operator's
+phone cannot trust the softAP), the package should grow a
+`wifi_prov_scheme_softap`-based flow alongside the captive path
+(see [Extending](#extending)).
 
 ---
 
@@ -109,11 +178,15 @@ the `apply_config` flow; we read back through
 
 ---
 
-## Custom endpoint: `iot-cam-info`
+## Custom endpoint: `/whoami`
 
-Registered after `start_provisioning()` and unregistered
-automatically when the manager stops. Replaces the `/whoami` URL
-the previous hand-rolled softAP firmware exposed.
+Registered alongside the captive portal on the same httpd server
+(see [Bring-up sequence](#bring-up-sequence-firmware-internals)).
+
+`GET /whoami` returns the device's identity as JSON. The
+captive-portal flow replaces the previous (protocomm-based)
+`iot-cam-info` endpoint with this httpd-served version; nothing
+about the response shape changed.
 
 Request: none (empty body).
 Response:
@@ -121,13 +194,11 @@ Response:
 ```json
 {
   "name": "iot-cam",
-  "fw_version": "0.1.0"
+  "fw_version": "0.1.0",
+  "softap_ssid": "IoT-Cam_3091B0",
+  "softap_security": "WIFI_AUTH_WPA2_PSK"
 }
 ```
-
-Missing fields fall through to empty strings rather than
-`\0` stringification glitches. Response buffer is `malloc`'d in
-the handler; protocomm frees it.
 
 ---
 
@@ -141,6 +212,10 @@ WiFi Provisioning  --->
   (iot-cam) Device name exposed on the iot-cam-info endpoint
 ```
 
+> The `PoP` symbol is preserved for API compatibility but is
+> ignored at runtime in captive-portal mode — the WPA2
+> passphrase is the operator-visible security gate.
+
 `idf.py menuconfig` shows the menu after the package is
 added to the build graph (path dependency resolves during
 `idf.py reconfigure`).
@@ -152,7 +227,7 @@ added to the build graph (path dependency resolves during
 Wipe the device by:
 
 ```c
-provisioning_reset_credentials();
+provisioning_reset_credentials();   /* calls esp_wifi_restore() */
 esp_restart();
 ```
 
@@ -168,9 +243,9 @@ can wire it.
 | Need | Where to put it |
 | --- | --- |
 | Camera + capture + ws plane | a sibling component in `embedded/iot_cams/components/camera/`, etc. |
-| BLE transport | a sibling component or fork the package; the SoftAP-only choice is documented in `include/provisioning.h`. |
+| BLE transport | reintroduce protocomm + wifi_provisioning as REQUIRES and write a separate scheme layer (out of scope for the offline-deployment branch). |
 | Factory-reset GPIO | any caller; this package exposes the reset function, not the trigger. |
-| Custom provisioning flows (e.g., cloud handoff) | a custom protocomm endpoint registered via `wifi_prov_mgr_endpoint_register()` after `start_provisioning()`. |
+| True captive-portal OS-detection | standalone DNS server on the softAP that resolves all hostnames to 192.168.4.1; this is a meaningful follow-up, see [Out of scope](#out-of-scope-for-this-branch). |
 
 ---
 
@@ -188,6 +263,9 @@ ESP-IDF v5.5.x's component manager fails with
 at `idf.py build` time. The lock file is frozen per consumer by
 `idf.py reconfigure`; removing the dep locally requires updating
 the lock in lockstep.
+
+After the captive rewrite, `protocomm` and `wifi_provisioning`
+were DROPPED from this list — the captive flow doesn't use either.
 
 ---
 
@@ -213,5 +291,15 @@ without touching the firmware source.
 
 - Camera pipeline + WebSocket control plane + supervision tasks.
 - BLE transport (see Extending table).
-- HTTP captive portal / phone-app UI work.
+- True captive-portal OS auto-detection via a DNS server on the
+  softAP. iOS/Android's "Sign in to network" prompt reads from
+  `captive.apple.com` / `connectivitycheck.gstatic.com`, so
+  without a DNS responder that resolves those to 192.168.4.1,
+  the OS-prompt trick doesn't fire automatically. Today the
+  operator must type `http://192.168.4.1/` explicitly (or follow
+  the OS prompt if their device supports it). A LwIP-level DNS
+  responder is the next milestone for full zero-touch UX.
 - Host-side UNITY test bed inside `iot_cams/tests/`.
+- TLS over the captive httpd. The WPA2 link is encrypted; for
+  hostile environments the operator would need to switch to the
+  protocomm path (see Extending table).
