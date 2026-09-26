@@ -167,6 +167,23 @@ can wire it.
 
 ---
 
+## Dependencies (managed vs built-in)
+
+| Component | Source | Why |
+| --- | --- | --- |
+| `provisioning`, `iot-cam-info` | this package | — |
+| `wifi_provisioning`, `protocomm`, `esp_wifi`, `esp_netif`, `esp_event`, `nvs_flash` | built-in to ESP-IDF v5.5 | declared in `CMakeLists.txt` `REQUIRES` |
+| `mdns` | **managed**, `espressif/mdns ^1.0.0` | moved out of the IDF tree in v5.5; declared here in `idf_component.yml::dependencies` |
+
+The `mdns` dep is the only one that's not a built-in. Without it,
+ESP-IDF v5.5.x's component manager fails with
+`Failed to resolve component 'mdns' required by component 'provisioning'`
+at `idf.py build` time. The lock file is frozen per consumer by
+`idf.py reconfigure`; removing the dep locally requires updating
+the lock in lockstep.
+
+---
+
 ## Lifting to a managed component
 
 The component is currently path-vendored from

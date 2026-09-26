@@ -1,2 +1,8 @@
 build/
 sdkconfig
+# ESP component manager writes this on the first successful
+# `idf.py reconfigure`. Each developer (and each IDF version)
+# produces a slightly different lock, so we ignore it locally
+# and regenerate on demand. If your team prefers reproducibility
+# over-per-developer, remove this line and commit the lock.
+dependencies.lock

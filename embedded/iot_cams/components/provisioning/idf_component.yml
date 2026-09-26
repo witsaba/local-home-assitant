@@ -2,9 +2,25 @@
 ##
 ## Manifest for the iot_cams provisioning component.
 ##
-## Current dependencies: none from the Espressif component registry —
-## every component we link lives inside ESP-IDF v5.5 itself
-## (`wifi_provisioning`, `protocomm`, `mdns`, `esp_wifi`, ...).
+## BUILT-IN IDF components we link (`wifi_provisioning`,
+## `protocomm`, `esp_wifi`, `esp_netif`, `esp_event`, `nvs_flash`)
+## do NOT appear here — they live in the IDF tree itself and are
+## resolved through `CMakeLists.txt::REQUIRES`.
+##
+## MANAGED COMPONENTS we pull from the Espressif Component
+## Registry:
+##
+##   espressif/mdns     — Starting ESP-IDF v5.5.x, mDNS was moved
+##                        out of the IDF tree and republished as a
+##                        managed component. The provision protocol
+##                        still uses it for SoftAP service
+##                        discovery (`_esp_wifi_prov._tcp`); without
+##                        this dep, the IDF v5.5 build will fail
+##                        with `Failed to resolve component 'mdns'`.
+##                        We pin to ^1 so the registry picks any
+##                        1.x compatible with ESP-IDF v5.5.x — the
+##                        consumer's `dependencies.lock` freezes the
+##                        concrete version after `idf.py reconfigure`.
 ##
 ## VENDORING: today this directory is path-referenced from
 ## `embedded/iot_cams/main/idf_component.yml` via `path:` — the
@@ -18,4 +34,5 @@
 version: 0.1.0
 description: WiFi provisioning wrapper for the iot_cams ESP-IDF firmware (SoftAP + protocomm security 1).
 url: https://example.invalid/iot_cams/provisioning  # placeholder; replace when promoted to a real upstream
-dependencies: {}
+dependencies:
+  espressif/mdns: "^1.0.0"
