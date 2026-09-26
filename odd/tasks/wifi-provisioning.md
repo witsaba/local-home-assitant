@@ -120,7 +120,7 @@ the operator's mobile browser with no app install. This needs a
 captive-portal HTML form inside the package, alongside (not
 replacing) the existing protocomm path.
 
-- [ ] **T12 — Captive-portal HTML form on the softAP**
+- [x] **T12 — Captive-portal HTML form on the softAP**
   - New file `src/captive_portal.c` + header `include/captive_portal.h`.
   - Bring up a second httpd server (or share the manager's via
     `wifi_prov_scheme_softap_set_httpd_handle()`) and register:
@@ -134,6 +134,11 @@ replacing) the existing protocomm path.
   - The WPA2 passphrase is the security gate; security-1 PoP
     stays out of the captive-portal HTML flow (the radio link
     encryption is sufficient for a private-network deployment).
+  - **IP log on connect**: `sta_got_ip_event_handler` logs
+    `station connected to "<ssid>": ip=X.X.X.X netmask=... gw=...`
+    on every `IP_EVENT_STA_GOT_IP`. Handler registered in
+    `softap_bring_up()`, fires on first attach, every reboot,
+    and WiFi reconnects.
   - Work-unit commit: `feat(provisioning): captive-portal HTML form for offline deployments`.
 
 - [ ] **T13 — Kconfig + sdkconfig.defaults default to captive**
@@ -162,11 +167,31 @@ replacing) the existing protocomm path.
   - Work-unit commit: `test(provisioning): device-flash verification of captive-portal flow`.
   - This is the acceptance test for the whole branch.
 
+- [x] **T16 — IPv4-only IP log + WiFi scan endpoint**
+  - `sta_got_ip_event_handler` now filters out IPv6 events by
+    checking the first 4 bytes of `ip_info->ip.addr` (all-0 =
+    IPv6/link-local; non-zero first byte = valid unicast IPv4).
+  - New `GET /scan` endpoint: triggers `esp_wifi_scan_start()`
+    (blocking, active scan), calls `esp_wifi_scan_get_ap_records()`
+    (IDF v5.5 API), returns JSON array of found SSIDs with RSSI.
+  - Filters: hidden SSIDs (operator can't select invisible ones),
+    enterprise/WPA3-enterprise (no supplicant available on ESP32).
+  - Commit: `3781005`.
+
+- [x] **T17 — HTML form with auto-scan and network dropdown**
+  - Form now shows a `<select>` dropdown populated automatically
+    on page load via `fetch('/scan')`.
+  - "Scan Networks" button with loading state ("Scanning...").
+  - "Other (type manually)" fallback so operators can type
+    hidden SSIDs if needed.
+  - RSSI signal bars (`****` to `*`) shown per network entry.
+  - Commit: `3781005`.
+
 ## Out of scope (follow-ups, not part of this branch)
 
 - A full `config` component with `identity`, `camera`, `control` fields.
 - BLE transport (`wifi_prov_scheme_ble`).
-- Captive portal / custom HTML form.
+- Captive portal / custom HTML form. ← delivered in T12/T16/T17
 - Host-side UNITY test bed inside `iot_cams/tests/`.
 - Factory-reset GPIO button contract; the package only exposes
   `provisioning_reset_credentials()` so the caller can wire any reset trigger.
