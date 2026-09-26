@@ -321,8 +321,12 @@ bool provisioning_is_provisioned(void)
      * power cycle.
      *
      * The IDF wifi driver stores its config under namespace
-     * "nvs.net80211", key "config". The blob is the full wifi_config_t
-     * struct (sizeof ~ 96 bytes depending on IDF version). */
+     * "nvs.net80211" with SEPARATE keys per field:
+     *   - sta.ssid     (blob, up to 32 bytes)
+     *   - sta.pswd     (blob, up to 64 bytes)
+     *   - sta.bssid    etc.
+     * It is NOT a single "config" blob. Verified against the
+     * wifi_nvs_config example in IDF v5.5.x. */
     nvs_handle_t nvs;
     esp_err_t err = nvs_open("nvs.net80211", NVS_READONLY, &nvs);
     if (err != ESP_OK) {
@@ -333,16 +337,19 @@ bool provisioning_is_provisioned(void)
         return false;
     }
 
-    wifi_config_t cfg = {0};
-    size_t len = sizeof(cfg);
-    err = nvs_get_blob(nvs, "config", &cfg, &len);
+    uint8_t ssid[32] = {0};
+    size_t ssid_len = sizeof(ssid);
+    err = nvs_get_blob(nvs, "sta.ssid", ssid, &ssid_len);
     nvs_close(nvs);
 
     if (err != ESP_OK) {
         /* Key not found or read error — no credentials yet. */
         return false;
     }
-    return cfg.sta.ssid[0] != '\0';
+    /* An SSID of all zeros means the wifi driver wrote an empty
+     * config (first-boot state). Any non-zero first byte means a
+     * real SSID was persisted. */
+    return ssid[0] != '\0';
 }
 
 esp_err_t provisioning_run(void)
