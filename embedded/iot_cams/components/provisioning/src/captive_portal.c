@@ -44,6 +44,10 @@
 #include <string.h>
 #include <stdlib.h>
 
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "freertos/semphr.h"
+
 #include "esp_log.h"
 #include "esp_http_server.h"
 #include "esp_netif.h"
@@ -59,21 +63,33 @@ static const char *TAG = "prov-cap";
  * provisioning orchestrator can hand it to the softAP scheme. */
 httpd_handle_t s_captive_httpd = NULL;
 
-/* WiFi scan result cache. Populated synchronously on the first
- * call to GET /scan (blocking ~3-5 s); kept for the lifetime
- * of the captive portal session. After teardown the buffer is
- * invalidated. */
+/* WiFi scan result cache. Written by the scan task (on the
+ * wifi task context) and read by the HTTPD handler on the httpd
+ * task context. Both sides are single-threaded so no lock is needed:
+ * the task writes, gives the sema, the handler reads. */
 #define MAX_SCAN_AP 20
 typedef struct {
     bool      populated;
     char      ssid[MAX_SCAN_AP][33];
     int8_t    rssi[MAX_SCAN_AP];
-    uint8_t   bssid[MAX_SCAN_AP][6];
-    uint8_t   authmode[MAX_SCAN_AP];
     int       count;
 } scan_cache_t;
 
-static scan_cache_t s_scan_cache = { .populated = false, .count = 0 };
+static scan_cache_t s_scan_cache;
+
+/* Scan synchronisation: binary semaphore. The HTTPD handler takes it
+ * (blocks), the scan task gives it when results are ready.
+ * Static objects so no heap allocation is needed. */
+static StaticSemaphore_t s_scan_done_sema_buf;
+static SemaphoreHandle_t s_scan_done_sema;
+
+/* The scan task owns its stack and TCB statically so teardown
+ * is deterministic (no leak risk). */
+static StaticTask_t s_scan_task_buf;
+static StackType_t  s_scan_task_stack[4096 / sizeof(StackType_t)];
+
+/* Forward declaration of the scan task entry point. */
+static void wifi_scan_task(void *arg);
 
 /* Forward decls for the five handlers. */
 static esp_err_t root_get_handler(httpd_req_t *req);
@@ -430,55 +446,39 @@ static esp_err_t whoami_get_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
-/* GET /scan — triggers a WiFi station scan (blocking, ~3-5 s) and
- * returns a JSON array of found networks:
- *   [{"ssid":"MyNet","rssi":-55}, ...]
- *
- * The scan runs synchronously on this request thread so the caller
- * (the browser JS fetch) gets fresh results every time. The operator
- * can re-tap "Scan" to refresh the list. Empty list means no APs
- * were found in range — they should try again from a different spot.
- *
- * NOTE: Scanning temporarily suspends the AP beacon for ~150 ms per
- * channel; connected operators may notice a brief stutter on the
- * softAP — this is expected and normal for ESP32 in APSTA mode.
- *
- * Authmode is checked and masked to avoid leaking enterprise
- * credentials — only OPEN and WPA2-personal APs are shown (matching
- * what the ESP32 station can actually join without a supplicant).
- */
-static esp_err_t scan_get_handler(httpd_req_t *req)
+/* The WiFi scan task. Runs on a proper FreeRTOS task (not
+ * the HTTPD worker thread), so esp_wifi_scan_start() has the
+ * correct pthread context and does not crash with LoadProhibited.
+ * Writes results to s_scan_cache and signals s_scan_done_sema
+ * before deleting itself. */
+static void wifi_scan_task(void *arg)
 {
-    (void)req;
-    httpd_resp_set_type(req, "application/json");
-    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    SemaphoreHandle_t done = (SemaphoreHandle_t)arg;
 
     wifi_scan_config_t scan_cfg = {
         .show_hidden = false,
         .scan_type   = WIFI_SCAN_TYPE_ACTIVE,
     };
 
-    ESP_LOGI(TAG, "/scan: starting active WiFi scan (max %d APs, 5 s timeout)",
+    ESP_LOGI(TAG, "wifi_scan_task: starting active scan (max %d APs)",
              MAX_SCAN_AP);
 
     esp_err_t r = esp_wifi_scan_start(&scan_cfg, true);
     if (r != ESP_OK) {
-        ESP_LOGE(TAG, "/scan: esp_wifi_scan_start: %s", esp_err_to_name(r));
-        httpd_resp_sendstr(req, "[]");
-        return ESP_OK;
+        ESP_LOGE(TAG, "wifi_scan_task: esp_wifi_scan_start: %s",
+                 esp_err_to_name(r));
+        goto done;
     }
 
     wifi_ap_record_t ap_info[MAX_SCAN_AP] = {0};
     uint16_t n = MAX_SCAN_AP;
     r = esp_wifi_scan_get_ap_records(&n, ap_info);
     if (r != ESP_OK) {
-        ESP_LOGE(TAG, "/scan: esp_wifi_scan_get_ap_records: %s", esp_err_to_name(r));
-        httpd_resp_sendstr(req, "[]");
-        return ESP_OK;
+        ESP_LOGE(TAG, "wifi_scan_task: esp_wifi_scan_get_ap_records: %s",
+                 esp_err_to_name(r));
+        goto done;
     }
 
-    /* Filter to operator-friendly networks (no enterprise, no hidden).
-     * Keep them in discovery order so the strongest AP appears first. */
     int out_count = 0;
     char ssid_buf[MAX_SCAN_AP][33] = {{0}};
     int8_t rssi_buf[MAX_SCAN_AP] = {0};
@@ -488,22 +488,22 @@ static esp_err_t scan_get_handler(httpd_req_t *req)
          * cannot read. */
         if (ap_info[i].ssid[0] == '\0') continue;
 
-        /* Skip networks requiring a supplicant (enterprise/WPA3-enterprise).
-         * Accept OPEN, WPA2-PSK, WPA2-WPA3 mixed. */
+        /* Skip enterprise / WPA3-enterprise: no supplicant available
+         * on ESP32 station without extra software. */
         wifi_auth_mode_t m = ap_info[i].authmode;
         if (m == WIFI_AUTH_WPA2_ENTERPRISE ||
             m == WIFI_AUTH_WPA3_ENTERPRISE) {
             continue;
         }
 
-        /* Copy SSID out of the record before the buffer goes out of scope. */
         memcpy(ssid_buf[out_count], ap_info[i].ssid,
                sizeof(ap_info[i].ssid));
         rssi_buf[out_count] = ap_info[i].rssi;
         out_count++;
     }
 
-    /* Update the in-memory cache so GET /scan reflects the same data. */
+    /* Write results to the shared cache (written here, read by the
+     * HTTPD handler after the sema is given). */
     memset(&s_scan_cache, 0, sizeof(s_scan_cache));
     s_scan_cache.populated = true;
     s_scan_cache.count = out_count;
@@ -512,23 +512,81 @@ static esp_err_t scan_get_handler(httpd_req_t *req)
         s_scan_cache.rssi[i] = rssi_buf[i];
     }
 
-    /* Build JSON by hand — avoids a heap allocation for the output
-     * buffer (max 20 entries × ~60 bytes ≈ 1.2 KB, well within
-     * the httpd send buffer). */
+    ESP_LOGI(TAG, "wifi_scan_task: found %d usable networks", out_count);
+
+done:
+    xSemaphoreGive(done);
+    vTaskDelete(NULL);
+}
+
+/* GET /scan — spawns the WiFi scan task and blocks until results
+ * are ready. Returns a JSON array: [{"ssid":"...","rssi":...},...]
+ *
+ * CRITICAL: esp_wifi_scan_start() MUST run on a FreeRTOS task that
+ * owns the WiFi pthread TLS key. Calling it from the HTTPD worker
+ * thread causes LoadProhibited in pthread_getspecific() (core dump
+ * from real device, confirmed). The task stack is static (4 KB,
+ * no heap allocation). */
+static esp_err_t scan_get_handler(httpd_req_t *req)
+{
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+
+    if (!s_scan_done_sema) {
+        httpd_resp_sendstr(req, "[]");
+        return ESP_OK;
+    }
+
+    /* Take the semaphore — blocks if a scan is already running
+     * (only one scan at a time to keep the cache consistent).
+     * portMAX_DELAY is safe here because the HTTPD worker can
+     * block without affecting other connections. */
+    if (xSemaphoreTake(s_scan_done_sema, portMAX_DELAY) != pdTRUE) {
+        httpd_resp_sendstr(req, "[]");
+        return ESP_OK;
+    }
+
+    /* Give the sema back so the task can re-give it when done.
+     * The task will do xSemaphoreGive(done) as its last action. */
+    xSemaphoreGive(s_scan_done_sema);
+
+    TaskHandle_t task_h = xTaskCreateStatic(
+        wifi_scan_task,          /* entry */
+        "wifi_scan",             /* name */
+        sizeof(s_scan_task_stack) / sizeof(StackType_t),
+        s_scan_done_sema,         /* args = done sema */
+        3,                       /* priority (below HTTPD) */
+        s_scan_task_stack,
+        &s_scan_task_buf
+    );
+
+    if (task_h == NULL) {
+        ESP_LOGE(TAG, "/scan: xTaskCreateStatic failed");
+        httpd_resp_sendstr(req, "[]");
+        return ESP_OK;
+    }
+
+    /* Block until the scan task populates the cache and gives the
+     * sema. While blocked the HTTPD worker is paused but the softAP
+     * and any other HTTPD handlers on different worker threads
+     * keep running. */
+    xSemaphoreTake(s_scan_done_sema, portMAX_DELAY);
+
+    /* Cache is now populated (or empty on error). Build the JSON
+     * response from the cache. */
     char resp[2048] = "[";
     size_t off = 1;
-    for (int i = 0; i < out_count && off < sizeof(resp) - 4; i++) {
+    for (int i = 0; i < s_scan_cache.count && off < sizeof(resp) - 4; i++) {
         if (i > 0) resp[off++] = ',';
         int n = snprintf(resp + off, sizeof(resp) - off,
                          "{\"ssid\":\"%s\",\"rssi\":%d}",
-                         ssid_buf[i], rssi_buf[i]);
+                         s_scan_cache.ssid[i], s_scan_cache.rssi[i]);
         if (n < 0 || (size_t)n >= sizeof(resp) - off) break;
         off += n;
     }
     resp[off++] = ']';
     resp[off] = '\0';
 
-    ESP_LOGI(TAG, "/scan: found %d usable networks", out_count);
     httpd_resp_send(req, resp, off);
     return ESP_OK;
 }
@@ -614,6 +672,20 @@ esp_err_t captive_portal_bring_up(void)
                                HTTPD_404_NOT_FOUND,
                                default_captive_handler);
 
+    /* Binary semaphore for scan task synchronisation. Static
+     * allocation — no heap. Starts ''taken'' so the handler
+     * blocks correctly on the first xSemaphoreTake. */
+    s_scan_done_sema = xSemaphoreCreateBinaryStatic(&s_scan_done_sema_buf);
+    if (!s_scan_done_sema) {
+        ESP_LOGE(TAG, "bring_up: xSemaphoreCreateBinaryStatic failed");
+        httpd_stop(s_captive_httpd);
+        s_captive_httpd = NULL;
+        return ESP_ERR_NO_MEM;
+    }
+    /* Give it so the handler's first take() succeeds and the
+     * task's give() unblocks it. */
+    xSemaphoreGive(s_scan_done_sema);
+
     return ESP_OK;
 }
 
@@ -624,6 +696,12 @@ void captive_portal_tear_down(void)
     }
     /* unregister_default isn't an IDF function; httpd_stop on
      * the handle cleans up. */
+    /* Invalidate the scan semaphore — any in-flight GET /scan
+     * will return [] when it finds s_scan_done_sema == NULL.
+     * The scan task holds its own copy of the handle so it is
+     * not affected by this write. */
+    s_scan_done_sema = NULL;
+
     esp_err_t r = httpd_stop(s_captive_httpd);
     if (r != ESP_OK) {
         ESP_LOGW(TAG, "tear_down: httpd_stop: %s", esp_err_to_name(r));
