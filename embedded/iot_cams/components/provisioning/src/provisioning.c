@@ -128,6 +128,20 @@ static void sta_got_ip_event_handler(void *arg, esp_event_base_t event_base,
     ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
     const esp_netif_ip_info_t *ip_info = &event->ip_info;
 
+    /* Filter out IPv6 events — IP_EVENT_STA_GOT_IP fires for
+     * both families on dual-stack systems; we only log IPv4
+     * so the operator sees a familiar 192.168.x.x address.
+     * In ESP-IDF v5.5 esp_netif_ip_info_t stores the IPv4 address
+     * as esp_ip4_addr_t (4 bytes); IPv6 variants have the IPv4
+     * bytes zeroed. We identify IPv4 by checking that the
+     * first byte is non-zero (valid unicast IPv4 always has
+     * first byte > 0; all-0 means IPv6-only). */
+    uint8_t *b = (uint8_t *)&ip_info->ip.addr;
+    if (b[0] == 0 && b[1] == 0 && b[2] == 0 && b[3] == 0) {
+        ESP_LOGD(TAG, "sta_got_ip: ignoring IPv6/link-local event");
+        return;
+    }
+
     /* Pull the SSID the station just joined so the operator
      * doesn't have to cross-reference with the form they typed.
      * esp_wifi_get_config returns the same NVS-backed storage

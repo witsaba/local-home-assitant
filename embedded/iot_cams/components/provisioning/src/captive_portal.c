@@ -59,10 +59,27 @@ static const char *TAG = "prov-cap";
  * provisioning orchestrator can hand it to the softAP scheme. */
 httpd_handle_t s_captive_httpd = NULL;
 
-/* Forward decls for the four handlers. */
+/* WiFi scan result cache. Populated synchronously on the first
+ * call to GET /scan (blocking ~3-5 s); kept for the lifetime
+ * of the captive portal session. After teardown the buffer is
+ * invalidated. */
+#define MAX_SCAN_AP 20
+typedef struct {
+    bool      populated;
+    char      ssid[MAX_SCAN_AP][33];
+    int8_t    rssi[MAX_SCAN_AP];
+    uint8_t   bssid[MAX_SCAN_AP][6];
+    uint8_t   authmode[MAX_SCAN_AP];
+    int       count;
+} scan_cache_t;
+
+static scan_cache_t s_scan_cache = { .populated = false, .count = 0 };
+
+/* Forward decls for the five handlers. */
 static esp_err_t root_get_handler(httpd_req_t *req);
 static esp_err_t provision_post_handler(httpd_req_t *req);
 static esp_err_t whoami_get_handler(httpd_req_t *req);
+static esp_err_t scan_get_handler(httpd_req_t *req);
 static esp_err_t default_captive_handler(httpd_req_t *req, httpd_err_code_t err);
 
 /* HTML page served by GET /. Title is the device name from the
@@ -92,35 +109,107 @@ static const char *HTML_FORM_BODY =
 "</head>"
 "<body>"
 "<h1>IoT-Cam Provisioning</h1>"
-"<p class='hint'>Enter your Wi-Fi network name (SSID) and password. "
-"The device will try to join your network and reboot into normal operation.</p>"
+"<p class='hint'>Select your Wi-Fi network and enter the password. "
+"The device will scan for available networks automatically.</p>"
 "<form id='p' onsubmit='return submit_form(event)'>"
 "<label>Network name (SSID)"
-"<input type='text' name='ssid' required maxlength='32' autocomplete='off' autocapitalize='none'>"
+"  <select id='ssid_sel' onchange='ssid_changed()' style='padding:0.75em;font-size:1em;border:1px solid #aaa;border-radius:6px;width:100%;box-sizing:border-box'>"
+"    <option value=''>-- Scanning... --</option>"
+"  </select>"
+"  <input type='text' id='ssid_other' placeholder='Type network name manually' "
+"         maxlength='32' autocomplete='off' autocapitalize='none' "
+"         style='margin-top:0.5em;display:none;padding:0.75em;font-size:1em;border:1px solid #aaa;border-radius:6px;width:100%;box-sizing:border-box'>"
 "</label>"
 "<label>Password"
 "<input type='password' name='password' required maxlength='64' autocomplete='off'>"
 "</label>"
+"<button type='button' id='scan_btn' onclick='scan_networks()' "
+"        style='background:#607d8b'>Scan Networks</button>"
 "<button type='submit'>Connect</button>"
 "</form>"
 "<div class='ok' id='ok'>Connected. You can close this page.</div>"
 "<div class='err' id='err'></div>"
 "<script>"
+"function ssid_changed(){"
+"  var sel=document.getElementById('ssid_sel');"
+"  var other=document.getElementById('ssid_other');"
+"  if(sel.value==='_other_'){"
+"    other.style.display='block';"
+"    other.required=true;"
+"    other.focus();"
+"  } else {"
+"    other.style.display='none';"
+"    other.required=false;"
+"    other.value='';"
+"  }"
+"}"
+"function get_selected_ssid(){"
+"  var sel=document.getElementById('ssid_sel');"
+"  if(sel.value==='')return '';"
+"  if(sel.value==='_other_')return document.getElementById('ssid_other').value.trim();"
+"  return sel.value;"
+"}"
+"function scan_networks(){"
+"  var sel=document.getElementById('ssid_sel');"
+"  var btn=document.getElementById('scan_btn');"
+"  sel.innerHTML=\"<option value=''>-- Scanning... --</option>\";"
+"  btn.disabled=true;"
+"  btn.textContent='Scanning...' ;"
+"  fetch('/scan')"
+"    .then(function(r){return r.json();})"
+"    .then(function(nets){"
+"      sel.innerHTML='';"
+"      if(!nets||nets.length===0){"
+"        var opt=document.createElement('option');"
+"        opt.value='';"
+"        opt.textContent='No networks found — check your router';"
+"        sel.appendChild(opt);"
+"      } else {"
+"        nets.forEach(function(n){"
+"          var opt=document.createElement('option');"
+"          opt.value=n.ssid;"
+"          /* RSSI bar: -30=excellent, -70=weak */"
+"          var bars='?';"
+"          var r=n.rssi;"
+"          if(r>-50)bars='****';"
+"          else if(r>-60)bars='*** ' ;"
+"          else if(r>-70)bars='**  ' ;"
+"          else if(r>-80)bars='*   ' ;"
+"          opt.textContent=n.ssid+' ('+bars+' signal, '+r+' dBm)';"
+"          sel.appendChild(opt);"
+"        });"
+"        /* Allow manual entry for networks not detected */"
+"        var opt=document.createElement('option');"
+"        opt.value='_other_';"
+"        opt.textContent='Other (type manually)';"
+"        sel.appendChild(opt);"
+"      }"
+"      btn.disabled=false;"
+"      btn.textContent='Scan Networks' ;"
+"    })"
+"    .catch(function(){"
+"      sel.innerHTML=\"<option value=''>Scan failed — try again</option>\";"
+"      btn.disabled=false;"
+"      btn.textContent='Scan Networks' ;"
+"    });"
+"}"
 "function submit_form(e){"
 "  e.preventDefault();"
-"  var f=document.getElementById('p');"
-"  var ssid=f.ssid.value.trim();"
-"  var password=f.password.value;"
+"  var ssid=get_selected_ssid().trim();"
+"  if(!ssid){alert('Please scan for networks or select Other and type the SSID.');return false;}"
+"  var password=document.getElementById('p').password.value;"
 "  var body='ssid='+encodeURIComponent(ssid)+'&password='+encodeURIComponent(password);"
 "  fetch('/provision',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:body})"
 "    .then(function(r){return r.json().then(function(j){return{ok:r.ok,status:r.status,body:j};});})"
 "    .then(function(o){"
-"      if(o.ok){document.getElementById('ok').style.display='block';f.style.display='none';}"
-"      else{var e=document.getElementById('err');e.textContent='Error '+(o.status||'?')+': '+(o.body&&o.body.error||'unknown');e.style.display='block';}"
+"      if(o.ok){document.getElementById('ok').style.display='block';document.getElementById('p').style.display='none';}"
+"      else{var err=document.getElementById('err');err.textContent='Error '+(o.status||'?')+': '+(o.body&&o.body.error||'unknown');err.style.display='block';}"
 "    })"
 "    .catch(function(err){var e=document.getElementById('err');e.textContent='Network error: '+err;e.style.display='block';});"
 "  return false;"
 "}"
+"/* Auto-scan on page load */"
+"scan_networks();"
 "</script>"
 "</body></html>";
 
@@ -341,6 +430,109 @@ static esp_err_t whoami_get_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+/* GET /scan — triggers a WiFi station scan (blocking, ~3-5 s) and
+ * returns a JSON array of found networks:
+ *   [{"ssid":"MyNet","rssi":-55}, ...]
+ *
+ * The scan runs synchronously on this request thread so the caller
+ * (the browser JS fetch) gets fresh results every time. The operator
+ * can re-tap "Scan" to refresh the list. Empty list means no APs
+ * were found in range — they should try again from a different spot.
+ *
+ * NOTE: Scanning temporarily suspends the AP beacon for ~150 ms per
+ * channel; connected operators may notice a brief stutter on the
+ * softAP — this is expected and normal for ESP32 in APSTA mode.
+ *
+ * Authmode is checked and masked to avoid leaking enterprise
+ * credentials — only OPEN and WPA2-personal APs are shown (matching
+ * what the ESP32 station can actually join without a supplicant).
+ */
+static esp_err_t scan_get_handler(httpd_req_t *req)
+{
+    (void)req;
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+
+    wifi_scan_config_t scan_cfg = {
+        .show_hidden = false,
+        .scan_type   = WIFI_SCAN_TYPE_ACTIVE,
+    };
+
+    ESP_LOGI(TAG, "/scan: starting active WiFi scan (max %d APs, 5 s timeout)",
+             MAX_SCAN_AP);
+
+    esp_err_t r = esp_wifi_scan_start(&scan_cfg, true);
+    if (r != ESP_OK) {
+        ESP_LOGE(TAG, "/scan: esp_wifi_scan_start: %s", esp_err_to_name(r));
+        httpd_resp_sendstr(req, "[]");
+        return ESP_OK;
+    }
+
+    wifi_ap_record_t ap_info[MAX_SCAN_AP] = {0};
+    uint16_t n = MAX_SCAN_AP;
+    r = esp_wifi_scan_get_ap_records(&n, ap_info);
+    if (r != ESP_OK) {
+        ESP_LOGE(TAG, "/scan: esp_wifi_scan_get_ap_records: %s", esp_err_to_name(r));
+        httpd_resp_sendstr(req, "[]");
+        return ESP_OK;
+    }
+
+    /* Filter to operator-friendly networks (no enterprise, no hidden).
+     * Keep them in discovery order so the strongest AP appears first. */
+    int out_count = 0;
+    char ssid_buf[MAX_SCAN_AP][33] = {{0}};
+    int8_t rssi_buf[MAX_SCAN_AP] = {0};
+
+    for (uint16_t i = 0; i < n && out_count < MAX_SCAN_AP; i++) {
+        /* Skip hidden SSIDs — operator cannot select what they
+         * cannot read. */
+        if (ap_info[i].ssid[0] == '\0') continue;
+
+        /* Skip networks requiring a supplicant (enterprise/WPA3-enterprise).
+         * Accept OPEN, WPA2-PSK, WPA2-WPA3 mixed. */
+        wifi_auth_mode_t m = ap_info[i].authmode;
+        if (m == WIFI_AUTH_WPA2_ENTERPRISE ||
+            m == WIFI_AUTH_WPA3_ENTERPRISE) {
+            continue;
+        }
+
+        /* Copy SSID out of the record before the buffer goes out of scope. */
+        memcpy(ssid_buf[out_count], ap_info[i].ssid,
+               sizeof(ap_info[i].ssid));
+        rssi_buf[out_count] = ap_info[i].rssi;
+        out_count++;
+    }
+
+    /* Update the in-memory cache so GET /scan reflects the same data. */
+    memset(&s_scan_cache, 0, sizeof(s_scan_cache));
+    s_scan_cache.populated = true;
+    s_scan_cache.count = out_count;
+    for (int i = 0; i < out_count; i++) {
+        memcpy(s_scan_cache.ssid[i], ssid_buf[i], 33);
+        s_scan_cache.rssi[i] = rssi_buf[i];
+    }
+
+    /* Build JSON by hand — avoids a heap allocation for the output
+     * buffer (max 20 entries × ~60 bytes ≈ 1.2 KB, well within
+     * the httpd send buffer). */
+    char resp[2048] = "[";
+    size_t off = 1;
+    for (int i = 0; i < out_count && off < sizeof(resp) - 4; i++) {
+        if (i > 0) resp[off++] = ',';
+        int n = snprintf(resp + off, sizeof(resp) - off,
+                         "{\"ssid\":\"%s\",\"rssi\":%d}",
+                         ssid_buf[i], rssi_buf[i]);
+        if (n < 0 || (size_t)n >= sizeof(resp) - off) break;
+        off += n;
+    }
+    resp[off++] = ']';
+    resp[off] = '\0';
+
+    ESP_LOGI(TAG, "/scan: found %d usable networks", out_count);
+    httpd_resp_send(req, resp, off);
+    return ESP_OK;
+}
+
 /* Default handler — capture unmatched GET URIs and respond with
  * the form so naive captive-portal probes (and operators with
  * muscle memory for typing a site URL) get a recognisable page.
@@ -406,6 +598,12 @@ esp_err_t captive_portal_bring_up(void)
         .handler = whoami_get_handler,
     };
     httpd_register_uri_handler(s_captive_httpd, &whoami_uri);
+
+    httpd_uri_t scan_uri = {
+        .uri = "/scan", .method = HTTP_GET,
+        .handler = scan_get_handler,
+    };
+    httpd_register_uri_handler(s_captive_httpd, &scan_uri);
 
     /* Default handler for unmatched URIs. The IDF httpd routes
      * requests with no matching URI handler through HTTPD_404;
