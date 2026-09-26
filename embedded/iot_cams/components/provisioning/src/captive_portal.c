@@ -83,13 +83,7 @@ static scan_cache_t s_scan_cache;
 static StaticSemaphore_t s_scan_done_sema_buf;
 static SemaphoreHandle_t s_scan_done_sema;
 
-/* The scan task owns its stack and TCB statically so teardown
- * is deterministic (no leak risk). */
-static StaticTask_t s_scan_task_buf;
-/* 8 KB stack — esp_wifi_scan_start() with active scanning on all
- * 2.4 GHz channels consumes ~5-6 KB of stack in the calling task;
- * 4 KB was too small (confirmed stack overflow on device). */
-static StackType_t  s_scan_task_stack[8192 / sizeof(StackType_t)];
+
 
 /* Forward declaration of the scan task entry point. */
 static void wifi_scan_task(void *arg);
@@ -553,18 +547,25 @@ static esp_err_t scan_get_handler(httpd_req_t *req)
      * The task will do xSemaphoreGive(done) as its last action. */
     xSemaphoreGive(s_scan_done_sema);
 
-    TaskHandle_t task_h = xTaskCreateStatic(
+    /* xTaskCreate (heap-allocated) is used instead of xTaskCreateStatic
+     * because ESP-IDF v5.5.3's xTaskCreateStatic requires the TCB
+     * buffer to satisfy strict alignment constraints that a plain
+     * .bss static variable does not guarantee — confirmed by
+     * StoreProhibited panic in prvAddNewTaskToReadyList when the
+     * static buffers happened to be misaligned. The ESP32 heap has
+     * ~147 KB free; a ~10 KB scan task is trivial overhead. */
+    TaskHandle_t task_h = NULL;
+    BaseType_t r = xTaskCreate(
         wifi_scan_task,          /* entry */
         "wifi_scan",             /* name */
-        sizeof(s_scan_task_stack) / sizeof(StackType_t),
-        s_scan_done_sema,         /* args = done sema */
+        8192,                    /* stack size in bytes */
+        s_scan_done_sema,        /* args = done sema */
         3,                       /* priority (below HTTPD) */
-        s_scan_task_stack,
-        &s_scan_task_buf
+        &task_h                  /* output handle */
     );
 
-    if (task_h == NULL) {
-        ESP_LOGE(TAG, "/scan: xTaskCreateStatic failed");
+    if (r != pdPASS || task_h == NULL) {
+        ESP_LOGE(TAG, "/scan: xTaskCreate failed (heap full?)");
         httpd_resp_sendstr(req, "[]");
         return ESP_OK;
     }
