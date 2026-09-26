@@ -310,8 +310,36 @@ bool provisioning_is_provisioned(void)
     if (!s_prov.initialized) {
         return false;
     }
-    wifi_config_t cfg;
-    if (esp_wifi_get_config(WIFI_IF_STA, &cfg) != ESP_OK) {
+
+    /* Read directly from NVS rather than calling esp_wifi_get_config().
+     * The latter returns whatever is in the wifi driver's static
+     * s_config[] array, which is only populated after esp_wifi_init()
+     * runs (which reads from NVS into RAM). If app_main() calls this
+     * function before the wifi stack is initialised, esp_wifi_get_config
+     * returns an empty config and we fall into provisioning_run() even
+     * though credentials ARE in NVS — confirmed on device after a
+     * power cycle.
+     *
+     * The IDF wifi driver stores its config under namespace
+     * "nvs.net80211", key "config". The blob is the full wifi_config_t
+     * struct (sizeof ~ 96 bytes depending on IDF version). */
+    nvs_handle_t nvs;
+    esp_err_t err = nvs_open("nvs.net80211", NVS_READONLY, &nvs);
+    if (err != ESP_OK) {
+        /* Namespace missing or NVS not initialised — treat as
+         * not provisioned. The first-boot flow will create the
+         * namespace when provisioning_apply_captive_form() writes
+         * the credentials. */
+        return false;
+    }
+
+    wifi_config_t cfg = {0};
+    size_t len = sizeof(cfg);
+    err = nvs_get_blob(nvs, "config", &cfg, &len);
+    nvs_close(nvs);
+
+    if (err != ESP_OK) {
+        /* Key not found or read error — no credentials yet. */
         return false;
     }
     return cfg.sta.ssid[0] != '\0';
