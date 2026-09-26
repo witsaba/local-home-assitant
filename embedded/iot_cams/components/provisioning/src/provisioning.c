@@ -191,7 +191,24 @@ static esp_err_t softap_bring_up(void)
         ESP_LOGE(TAG, "softap_bring_up: default wifi ap netif NULL");
         return ESP_FAIL;
     }
-    esp_netif_set_default_netif(ap_netif);
+
+    /* CRITICAL: also create the station netif. Without it, the LwIP
+     * stack has no DHCP client for the station interface, so
+     * IP_EVENT_STA_GOT_IP never fires after the device joins the
+     * home AP — confirmed on device (wifi:connected with <ssid>
+     * logged but no IP event for 30 s, then timeout). APSTA mode
+     * still works at the wifi-driver level for L2 association,
+     * but the L3 / DHCP path requires this netif. */
+    esp_netif_t *sta_netif = esp_netif_create_default_wifi_sta();
+    if (sta_netif == NULL) {
+        ESP_LOGE(TAG, "softap_bring_up: default wifi sta netif NULL");
+        return ESP_FAIL;
+    }
+
+    /* Set the station netif as default — once the softAP is torn
+     * down (post-provisioning) the station is the only interface
+     * and default routing/hosted services should land there. */
+    esp_netif_set_default_netif(sta_netif);
 
     wifi_init_config_t wifi_init_cfg = WIFI_INIT_CONFIG_DEFAULT();
     r = esp_wifi_init(&wifi_init_cfg);
