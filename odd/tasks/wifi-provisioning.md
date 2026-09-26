@@ -61,13 +61,20 @@ for greppability.
   - `provisioning_is_provisioned()` reads from the same NVS namespace the manager uses.
   - Work-unit commit: `feat(provisioning): implement provisioning core wrappers`.
 
-- [ ] **T3 — Credentials persistence**
-  - `provisioning_reset_credentials()` — `nvs_flash_erase_partition` style erase scoped to the `prov_cfg` namespace.
-  - Document the schema in header: `prov_cfg / ssid`, `prov_cfg / password`, `prov_cfg / pop`, `prov_cfg / security`, `prov_cfg / service_name`.
-  - Note that `wifi_prov_mgr_*` already persists `ssid` + `password` in
-    `esp_wifi_*` NVS namespace via the manager's built-in glue — that's a deliberate
-    reuse, not a duplication.
-  - Work-unit commit: `feat(provisioning): add credential reset + persistence doc`.
+- [ ] **T3 — Credentials persistence + reset**
+  - Document the storage layout: `wifi_prov_mgr_*` persists `ssid` + `password`
+    to NVS via `esp_wifi_set_config()` — verified by reading the v5.5
+    manager header (`wifi_provisioning/manager.h`). The package does **not**
+    introduce a parallel `prov_cfg` namespace; that would duplicate state.
+  - `provisioning_reset_credentials()` — single function, single path:
+    `wifi_prov_mgr_reset_provisioning()` clears the wifi-managed keys.
+    `wifi_prov_mgr_is_provisioned()` then returns false on the next call,
+    and the next `provisioning_run()` brings up the SoftAP.
+  - PoP / service_name are either Kconfig-fixed at build time or supplied
+    per-boot via `provisioning_config_t` — neither needs runtime NVS
+    persistence. Document this so a future maintainer does not "helpfully"
+    add a parallel namespace.
+  - Work-unit commit: `feat(provisioning): document storage layout + reset path`.
 
 - [ ] **T4 — Custom endpoint: `iot-cam-info`**
   - Register an additional protocomm endpoint exposing device identity (name, fw version).

@@ -12,15 +12,22 @@
  * not part of the public surface. If you find yourself wanting to
  * include them from app_main, you are reaching past the package.
  *
- * PERSISTENCE — the package owns the `prov_cfg` NVS namespace:
- *   - svc_name   (string)  SoftAP SSID in effect at run time
- *   - pop        (string)  Proof-of-possession in effect at run time
- *   - sec        (uint8)   Security level (0 or 1)
+ * PERSISTENCE — the package does NOT carry a parallel NVS
+ * namespace. The IDF `wifi_provisioning` manager writes the user-
+ * submitted ssid + password to NVS via `esp_wifi_set_config()` /
+ * esp_wifi's own NVS storage layer during the apply_config
+ * flow. We rely on that built-in persistence for the credentials
+ * the user cares about (so the device joins the same AP after a
+ * reboot without re-provisioning). `provisioning_is_provisioned()`
+ * reads back through `wifi_prov_mgr_is_provisioned()` against
+ * the same storage.
  *
- * The Wi-Fi credentials (ssid + password) live in the namespace
- * esp_wifi itself uses; the IDF manager writes there during the
- * apply_config flow. This split is intentional and matches
- * esp-provisioning's docs.
+ * PoP and service_name are input to the provisioning session,
+ * not output. They are Kconfig-fixed at build time (or supplied
+ * per-boot via `provisioning_config_t`); runtime NVS persistence
+ * is not required for either. `provisioning_reset_credentials()`
+ * is the single reset path and routes through
+ * `wifi_prov_mgr_reset_provisioning()`.
  *
  * THREADING — provisioning_init() must be called from app_main
  * (single thread) before provisioning_run(). provisioning_run()
@@ -116,9 +123,10 @@ esp_err_t provisioning_run(void);
  * provisioning_run(). Idempotent while the manager is idle. */
 void provisioning_stop(void);
 
-/* Wipe the `prov_cfg` namespace + the esp_wifi credentials. After
- * this call provisioning_is_provisioned() returns false and the
- * next provisioning_run() will start the SoftAP. Used by the
+/* Wipe the wifi-managed NVS credentials (ssid + password) via
+ * `wifi_prov_mgr_reset_provisioning()`. After this call
+ * provisioning_is_provisioned() returns false and the next
+ * provisioning_run() will start the SoftAP. Used by the
  * factory-reset flow. */
 esp_err_t provisioning_reset_credentials(void);
 
