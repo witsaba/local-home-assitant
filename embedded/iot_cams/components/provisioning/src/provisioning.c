@@ -37,6 +37,7 @@
 
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <inttypes.h>
 
 #include "esp_log.h"
@@ -74,6 +75,16 @@ static volatile bool s_prov_end_success = false;
 static void softap_event_handler(void *arg, esp_event_base_t event_base,
                                  int event_id, void *event_data);
 
+/* Forward decl for the iot-cam-info custom protocomm endpoint
+ * (T4). The handler signature follows protocomm's
+ * `protocomm_req_handler_t`: input is opaque (we ignore it),
+ * output is malloc'd and handed back to protocomm which frees it. */
+static esp_err_t iot_cam_info_handler(uint32_t session_id,
+                                      const uint8_t *inbuf, ssize_t inlen,
+                                      uint8_t **outbuf, ssize_t *outlen,
+                                      void *priv_data);
+
+
 static bool copy_bounded(char *dst, size_t dst_size, const char *src,
                          size_t src_len)
 {
@@ -107,6 +118,52 @@ static void derive_service_name(char *out, size_t out_size)
     snprintf(out, out_size, "%s_%02X%02X%02X",
              prefix, mac[3], mac[4], mac[5]);
 }
+
+/* Custom protocomm endpoint — exposes iot_cams identity to the
+ * provisioning client. Registered AFTER start_provisioning per the
+ * IDF docs; protocomm frees `*outbuf` after the transport layer
+ * hands it to the client. The endpoint is unregistered
+ * automatically when the manager stops.
+ *
+ * Response shape (hand-rolled JSON, defensive): {\"name\":\"...\",
+ * \"fw_version\":\"...\"}. Missing fields become empty strings. */
+static esp_err_t iot_cam_info_handler(uint32_t session_id,
+                                      const uint8_t *inbuf, ssize_t inlen,
+                                      uint8_t **outbuf, ssize_t *outlen,
+                                      void *priv_data)
+{
+    (void)session_id;
+    (void)inbuf;
+    (void)inlen;
+    (void)priv_data;
+
+    const char *name = s_prov.app_info.name
+        ? s_prov.app_info.name : "";
+    const char *fw_version = s_prov.app_info.fw_version
+        ? s_prov.app_info.fw_version : "";
+
+    /* Size budget = sum of fixed string length + 2 strings +
+     * 8 quotes + null terminator. Hand-rolled to drop the cJSON
+     * managed-component dep entirely. */
+    const char *tmpl = "{\"name\":\"%s\",\"fw_version\":\"%s\"}";
+    size_t need = strlen(tmpl) + strlen(name) + strlen(fw_version) + 1;
+
+    uint8_t *resp = (uint8_t *)malloc(need);
+    if (!resp) {
+        ESP_LOGE(TAG, "iot-cam-info: out of memory (need %u)",
+                 (unsigned)need);
+        return ESP_ERR_NO_MEM;
+    }
+    int n = snprintf((char *)resp, need, tmpl, name, fw_version);
+    if (n < 0 || (size_t)n >= need) {
+        free(resp);
+        return ESP_FAIL;
+    }
+    *outbuf = resp;
+    *outlen = (ssize_t)n;
+    return ESP_OK;
+}
+
 
 /* Friendly log lines for the events that matter during a
  * provisioning session. Registered on the default event loop
@@ -340,6 +397,23 @@ esp_err_t provisioning_run(void)
         return r;
     }
 
+    /* Create the iot-cam-info endpoint BEFORE start_provisioning
+     * (per the IDF contract). The handler is registered below,
+     * AFTER start_provisioning. Endpoint + handler are torn down
+     * by the manager when it stops. */
+    const char *iot_ep = "iot-cam-info";
+    r = wifi_prov_mgr_endpoint_create(iot_ep);
+    if (r != ESP_OK) {
+        ESP_LOGE(TAG, "run: endpoint_create(%s): %s",
+                 iot_ep, esp_err_to_name(r));
+        esp_event_handler_unregister(WIFI_PROV_EVENT,
+                                     ESP_EVENT_ANY_ID,
+                                     &softap_event_handler);
+        wifi_prov_mgr_deinit();
+        s_prov.manager_running = false;
+        return r;
+    }
+
     char ssid[PROV_NAME_MAX_LEN + 1] = {0};
     derive_service_name(ssid, sizeof(ssid));
 
@@ -377,6 +451,24 @@ esp_err_t provisioning_run(void)
         /* service_key unused for SoftAP — pass empty */ "");
     if (r != ESP_OK) {
         ESP_LOGE(TAG, "run: start_provisioning: %s", esp_err_to_name(r));
+        esp_event_handler_unregister(WIFI_PROV_EVENT,
+                                     ESP_EVENT_ANY_ID,
+                                     &softap_event_handler);
+        wifi_prov_mgr_deinit();
+        s_prov.manager_running = false;
+        return r;
+    }
+
+    /* Register the iot-cam-info endpoint handler AFTER
+     * start_provisioning (per the IDF contract). The endpoint
+     * itself was created before start. */
+    r = wifi_prov_mgr_endpoint_register(iot_ep,
+                                       iot_cam_info_handler, NULL);
+    if (r != ESP_OK) {
+        ESP_LOGE(TAG, "run: endpoint_register(%s): %s",
+                 iot_ep, esp_err_to_name(r));
+        wifi_prov_mgr_stop_provisioning();
+        wifi_prov_mgr_wait();
         esp_event_handler_unregister(WIFI_PROV_EVENT,
                                      ESP_EVENT_ANY_ID,
                                      &softap_event_handler);
