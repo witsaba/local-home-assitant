@@ -298,6 +298,32 @@ esp_err_t provisioning_init(const provisioning_config_t *cfg,
         return ESP_ERR_INVALID_STATE;
     }
 
+    /* Make the package truly self-contained: initialize NVS
+     * here, before anything in the manager touches storage.
+     * Required because esp_wifi_init() opens the wifi NVS
+     * namespace and returns ESP_ERR_NVS_NOT_INITIALIZED if we
+     * haven't. Idempotent — repeats return ESP_OK or
+     * ESP_ERR_INVALID_STATE (e.g. partition already opened). */
+    {
+        esp_err_t nv = nvs_flash_init();
+        if (nv == ESP_ERR_NVS_NO_FREE_PAGES ||
+            nv == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+            ESP_LOGW(TAG, "init: nvs erase (codes=%s)",
+                     esp_err_to_name(nv));
+            esp_err_t er = nvs_flash_erase();
+            if (er != ESP_OK) {
+                ESP_LOGE(TAG, "init: nvs_flash_erase: %s",
+                         esp_err_to_name(er));
+                return er;
+            }
+            nv = nvs_flash_init();
+        }
+        if (nv != ESP_OK && nv != ESP_ERR_INVALID_STATE) {
+            ESP_LOGE(TAG, "init: nvs_flash_init: %s", esp_err_to_name(nv));
+            return nv;
+        }
+    }
+
     memset(&s_prov, 0, sizeof(s_prov));
     s_prov.security = cfg->security;
 
@@ -449,11 +475,16 @@ esp_err_t provisioning_run(void)
 
     ESP_LOGI(TAG, "start_provisioning ssid=%s security=%d",
              ssid, (int)security);
+    /* The SoftAP scheme wants service_key = the WPA2 passphrase
+     * on the device's softAP network (min 8, max 64 chars).
+     * Distinct from the PoP, which authenticates the security-1
+     * session that runs OVER the softAP link. */
+    const char *softap_pass = CONFIG_PROVISIONING_SOFTAP_PASS;
     r = wifi_prov_mgr_start_provisioning(
         security,
         s_prov.pop,
         ssid,
-        /* service_key unused for SoftAP — pass empty */ "");
+        softap_pass);
     if (r != ESP_OK) {
         ESP_LOGE(TAG, "run: start_provisioning: %s", esp_err_to_name(r));
         esp_event_handler_unregister(WIFI_PROV_EVENT,

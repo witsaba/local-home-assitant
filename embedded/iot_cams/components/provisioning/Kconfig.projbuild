@@ -25,6 +25,20 @@ menu "WiFi Provisioning"
             Maximum 32 bytes. Surface the same PoP in the
             provisioning phone app so the handshake completes.
 
+    config PROVISIONING_SOFTAP_PASS
+        string "SoftAP WPA2 passphrase"
+        default "abcd1234"
+        range "1" "64"
+        help
+            The SoftAP transport's `service_key` arg to
+            wifi_prov_mgr_start_provisioning() — translates to the
+            WPA2 passphrase on the device's softAP network
+            (the IoT-Cam_xxXXxx SSID). Min 8, max 64 bytes per
+            the IDF SoftAP scheme. The phone-app operator types
+            this when joining the softAP before the secure handshake.
+            Distinct from the PoP: PoP authenticates the security-1
+            session; this passphrase authenticates the Wi-Fi link.
+
     config PROVISIONING_SERVICE_NAME_PREFIX
         string "SoftAP SSID prefix"
         default "IoT-Cam"

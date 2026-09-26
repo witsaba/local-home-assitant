@@ -75,6 +75,7 @@ the IDF tree uses.
 | Transport | SoftAP + HTTP + mDNS | `wifi_prov_scheme_softap` |
 | Security | Security 1 (X25519 + PoP + AES-CTR) | Kconfig + per-call `cfg.security` |
 | PoP | `CONFIG_PROVISIONING_POP` | Kconfig |
+| SoftAP WPA2 passphrase | `CONFIG_PROVISIONING_SOFTAP_PASS` (8–64 bytes) | Kconfig |
 | Service name | `"{prefix}_{MAC3}"` | derived in `derive_service_name()` |
 
 Security 0 (plain text) is exposed for debugging; never ship
@@ -82,8 +83,14 @@ firmware with it enabled. Security 2 (SRP6a + AES-GCM) requires a
 managed-component extension and is intentionally out of scope.
 
 The phone-side provisioning app prompts the operator for the PoP
-during the handshake — make sure the PoP is printed on the
-device's label or in its installation guide.
+during the security-1 handshake — make sure the PoP is printed on
+the device's label or in its installation guide.
+
+The phone first joins the device's softAP network (SSID
+`IoT-Cam_xxXXxx`, WPA2 passphrase from `CONFIG_PROVISIONING_SOFTAP_PASS`),
+then receives the security-1 challenge, then enters the PoP. The
+two credentials are separate on purpose — the passphrase gates the
+Wi-Fi link; the PoP gates the secure provisioning session on top.
 
 ---
 
@@ -128,8 +135,8 @@ the handler; protocomm frees it.
 
 ```
 WiFi Provisioning  --->
-  (1) Security version (0 = plain, 1 = X25519 + AES-CTR)  --->
   (abcd1234) Default proof-of-possession
+  (abcd1234) SoftAP WPA2 passphrase
   (IoT-Cam) SoftAP SSID prefix
   (iot-cam) Device name exposed on the iot-cam-info endpoint
 ```
