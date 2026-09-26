@@ -107,6 +107,46 @@ const char *internal_prov_ssid(void)
 /* On the bring-up path we currently use esp_netif + esp_wifi
  * directly without a manager; we still need the netif + mDNS
  * idioms for the SoftAP service advertising. */
+
+/* Forward decl for the station IP-acquired event handler.
+ * Registered in softap_bring_up() so it's armed before any
+ * wifi connect attempt; never unregistered (the operator wants
+ * to see every home-Wi-Fi join in the log). */
+static void sta_got_ip_event_handler(void *arg, esp_event_base_t event_base,
+                                    int32_t event_id, void *event_data);
+
+/* Operator-visible "we joined the home AP" log line. Fires on
+ * every successful station DHCP lease — the post-provisioning
+ * attach, every subsequent reboot that re-joins, and any
+ * reconnect after Wi-Fi transient drop. */
+static void sta_got_ip_event_handler(void *arg, esp_event_base_t event_base,
+                                    int32_t event_id, void *event_data)
+{
+    (void)arg;
+    if (event_base != IP_EVENT || event_id != IP_EVENT_STA_GOT_IP) return;
+
+    ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
+    const esp_netif_ip_info_t *ip_info = &event->ip_info;
+
+    /* Pull the SSID the station just joined so the operator
+     * doesn't have to cross-reference with the form they typed.
+     * esp_wifi_get_config returns the same NVS-backed storage
+     * the form POST wrote through esp_wifi_set_config. */
+    wifi_config_t wifi_cfg = {0};
+    char ssid[33] = "(unset)";
+    if (esp_wifi_get_config(WIFI_IF_STA, &wifi_cfg) == ESP_OK) {
+        strncpy(ssid, (const char *)wifi_cfg.sta.ssid, sizeof(ssid));
+        ssid[sizeof(ssid) - 1] = '\0';
+    }
+
+    ESP_LOGI(TAG, "station connected to \"%s\": ip=" IPSTR
+                  " netmask=" IPSTR " gw=" IPSTR,
+             ssid,
+             IP2STR(&ip_info->ip),
+             IP2STR(&ip_info->netmask),
+             IP2STR(&ip_info->gw));
+}
+
 static esp_err_t softap_bring_up(void)
 {
     esp_err_t r;
@@ -124,6 +164,13 @@ static esp_err_t softap_bring_up(void)
                  esp_err_to_name(r));
         return r;
     }
+
+    /* Register the IP_EVENT_STA_GOT_IP handler on the default
+     * event loop. Idempotent on repeat bring-ups (which can
+     * happen if the device loses creds and re-enters the
+     * provisioning branch). */
+    esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP,
+                                sta_got_ip_event_handler, NULL);
 
     esp_netif_t *ap_netif = esp_netif_create_default_wifi_ap();
     if (ap_netif == NULL) {
@@ -369,6 +416,21 @@ esp_err_t provisioning_apply_captive_form(const char *ssid, const char *password
         ESP_LOGE(TAG, "apply_form: esp_wifi_set_config: %s",
                  esp_err_to_name(r));
         return r;
+    }
+
+    /* Kick off the station connect. In APSTA mode this only
+     * affects the STA side; the softAP stays up so the
+     * operator's browser gets the JSON success response before
+     * they disconnect. The IP_EVENT_STA_GOT_IP handler logs the
+     * assigned address. */
+    esp_err_t cr = esp_wifi_connect();
+    if (cr != ESP_OK && cr != ESP_ERR_WIFI_CONN) {
+        /* ESP_ERR_WIFI_CONN means the STA is already busy;
+         * the connect call still queued. Treat as success since
+         * the config IS in NVS and the wifi driver will retry. */
+        ESP_LOGE(TAG, "apply_form: esp_wifi_connect: %s",
+                 esp_err_to_name(cr));
+        return cr;
     }
 
     s_last_prov_success = true;
