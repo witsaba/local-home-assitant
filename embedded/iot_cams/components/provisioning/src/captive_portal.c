@@ -86,7 +86,10 @@ static SemaphoreHandle_t s_scan_done_sema;
 /* The scan task owns its stack and TCB statically so teardown
  * is deterministic (no leak risk). */
 static StaticTask_t s_scan_task_buf;
-static StackType_t  s_scan_task_stack[4096 / sizeof(StackType_t)];
+/* 8 KB stack — esp_wifi_scan_start() with active scanning on all
+ * 2.4 GHz channels consumes ~5-6 KB of stack in the calling task;
+ * 4 KB was too small (confirmed stack overflow on device). */
+static StackType_t  s_scan_task_stack[8192 / sizeof(StackType_t)];
 
 /* Forward declaration of the scan task entry point. */
 static void wifi_scan_task(void *arg);
