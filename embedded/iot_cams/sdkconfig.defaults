@@ -24,6 +24,11 @@ CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
 CONFIG_ESPTOOLPY_FLASHFREQ_40M=y
 CONFIG_ESPTOOLPY_FLASHMODE_DIO=y
 
+# The AI-Thinker ESP32-CAM board uses a Boya BY25Q32 flash
+# chip. Without this flag the build uses the generic flash
+# driver which works but misses per-chip optimisations.
+CONFIG_SPI_FLASH_SUPPORT_BOYA_CHIP=y
+
 # === WiFi provisioning ===
 #
 # Mirrors `components/provisioning/Kconfig.projbuild`. With
