@@ -1,0 +1,48 @@
+# components/provisioning/Kconfig.projbuild
+#
+# Project-level config menu for the iot_cams provisioning component.
+# Appears under "WiFi Provisioning" in `idf.py menuconfig`.
+#
+# Each visible symbol selects its underlying IDF dependency so a
+# consumer who enables our component also enables everything we
+# actually link against. This avoids the "functionally present,
+# actually disabled" failure mode at `idf.py reconfigure` time.
+
+menu "WiFi Provisioning"
+
+    config PROVISIONING_SECURITY
+        int "Security version (0 = plain, 1 = X25519 + AES-CTR)"
+        default 1
+        range 0 1
+        help
+            Security 1 is the only production-grade option — X25519
+            key exchange with proof-of-possession (PoP) and AES-CTR
+            for session encryption. Security 0 is plain text and
+            exists for debugging only; never ship it.
+
+    config PROVISIONING_POP
+        string "Default proof-of-possession"
+        default "abcd1234"
+        help
+            Used when the firmware does not pass a custom
+            provisioning_config_t::pop at provisioning_init() time.
+            Maximum 32 bytes. Surface the same PoP in the
+            provisioning phone app so the handshake completes.
+
+    config PROVISIONING_SERVICE_NAME_PREFIX
+        string "SoftAP SSID prefix"
+        default "IoT-Cam"
+        help
+            The MAC suffix is appended at runtime when the firmware
+            does not pass a custom service_name. Must satisfy the
+            softAP SSID length budget (32 bytes total).
+
+    config PROVISIONING_DEVICE_NAME
+        string "Device name exposed on the iot-cam-info endpoint"
+        default "iot-cam"
+        help
+            Free-form identifier shown to the user during the
+            provisioning phone-app flow. Trivial cosmetic; the
+            control plane treats it as opaque.
+
+endmenu

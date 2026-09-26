@@ -1,0 +1,21 @@
+## components/provisioning/idf_component.yml
+##
+## Manifest for the iot_cams provisioning component.
+##
+## Current dependencies: none from the Espressif component registry —
+## every component we link lives inside ESP-IDF v5.5 itself
+## (`wifi_provisioning`, `protocomm`, `mdns`, `esp_wifi`, ...).
+##
+## VENDORING: today this directory is path-referenced from
+## `embedded/iot_cams/main/idf_component.yml` via `path:` — the
+## build graph treats it identically to a managed component after
+## `idf.py reconfigure`. To lift it to a separately versioned
+## upstream component (or its own repo), move the contents of this
+## directory to a new repo, register that URL here under
+## `dependencies:` or via the URL override in the consumer's
+## idf_component.yml, and replace the consumer's `path:` with the
+## URL. No code changes needed.
+version: 0.1.0
+description: WiFi provisioning wrapper for the iot_cams ESP-IDF firmware (SoftAP + protocomm security 1).
+url: https://example.invalid/iot_cams/provisioning  # placeholder; replace when promoted to a real upstream
+dependencies: {}
