@@ -73,7 +73,7 @@ static volatile bool s_prov_end_success = false;
 /* Forward decl to keep softap_event_handler() close to its
  * call site in provisioning_run(). */
 static void softap_event_handler(void *arg, esp_event_base_t event_base,
-                                 int event_id, void *event_data);
+                                 int32_t event_id, void *event_data);
 
 /* Forward decl for the iot-cam-info custom protocomm endpoint
  * (T4). The handler signature follows protocomm's
@@ -173,7 +173,7 @@ static esp_err_t iot_cam_info_handler(uint32_t session_id,
  * headers and has shifted across versions. Logging the raw
  * integer is sufficient for post-mortem and stays portable. */
 static void softap_event_handler(void *arg, esp_event_base_t event_base,
-                                 int event_id, void *event_data)
+                                 int32_t event_id, void *event_data)
 {
     (void)arg;
     if (event_base != WIFI_PROV_EVENT) return;

@@ -6,3 +6,4 @@ sdkconfig
 # and regenerate on demand. If your team prefers reproducibility
 # over-per-developer, remove this line and commit the lock.
 dependencies.lock
+embedded/iot_cams/managed_components/

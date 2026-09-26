@@ -10,13 +10,11 @@
 
 menu "WiFi Provisioning"
 
-    comment
-        The security version is configured at runtime via
-        provisioning_config_t::security (defaults to
-        PROV_SECURITY_1). Build-time Kconfig controls live under
-        the IDF Component config -> ESP PROTOCOMM menu and gate
-        which security versions protocomm actually compiles in.
-    endcomment
+    # The security version is configured at runtime via
+    # provisioning_config_t::security (defaults to
+    # PROV_SECURITY_1). Build-time Kconfig controls live under
+    # the IDF Component config -> ESP PROTOCOMM menu and gate
+    # which security versions protocomm actually compiles in.
 
     config PROVISIONING_POP
         string "Default proof-of-possession"
