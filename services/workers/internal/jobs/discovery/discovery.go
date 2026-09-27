@@ -84,7 +84,11 @@ func (j *Job) Run(ctx context.Context, emit func(types.DiscoveryEvent)) error {
 		targets = append(targets, expandCIDR(&sn.CIDR)...)
 	}
 	if len(targets) == 0 {
-		j.logger.Debug("no targets to probe", zap.Int("subnets", len(subnets)))
+		j.logger.Info("scan complete",
+			zap.Int("subnets", len(subnets)),
+			zap.Int("targets", 0),
+			zap.Int("devices_found", 0),
+		)
 		return nil
 	}
 
@@ -137,7 +141,11 @@ dispatch:
 		}
 	}
 
-	j.logger.Info("scan complete", zap.Int("devices_found", count))
+	j.logger.Info("scan complete",
+		zap.Int("subnets", len(subnets)),
+		zap.Int("targets", len(targets)),
+		zap.Int("devices_found", count),
+	)
 	return nil
 }
 
