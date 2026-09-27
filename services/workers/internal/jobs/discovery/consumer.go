@@ -20,14 +20,24 @@ func NewConsumer(events <-chan types.DiscoveryEvent, logger *zap.Logger) *Consum
 }
 
 // Start runs the consumer loop until ctx is cancelled OR the events
-// channel is closed. It is the caller's responsibility to close the
-// events channel once no more writes can happen (i.e. after the
-// scheduler has fully drained).
+// channel is closed. When ctx is cancelled, any events still buffered
+// in the channel are drained (non-blocking) and logged so we don't
+// lose hits that arrived in the same scan tick as the shutdown signal.
 func (c *Consumer) Start(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			for {
+				select {
+				case ev, ok := <-c.events:
+					if !ok {
+						return
+					}
+					c.log(ev)
+				default:
+					return
+				}
+			}
 		case ev, ok := <-c.events:
 			if !ok {
 				return
