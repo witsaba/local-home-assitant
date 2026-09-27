@@ -40,7 +40,7 @@ func makeClient(targetAddr string) *http.Client {
 func TestProbeWhoami_Hit(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Witsaba-Device", "true")
-		json.NewEncoder(w).Encode(map[string]string{
+		_ = json.NewEncoder(w).Encode(map[string]string{
 			"name": "cam-01",
 			"mac":  "aa:bb:cc:dd:ee:ff",
 			"fw":   "1.2.3",
@@ -68,7 +68,7 @@ func TestProbeWhoami_Hit(t *testing.T) {
 func TestProbeWhoami_MissHeaderFalse(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Witsaba-Device", "false")
-		json.NewEncoder(w).Encode(map[string]string{"name": "plain"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"name": "plain"})
 	}))
 	defer srv.Close()
 
@@ -129,7 +129,7 @@ func TestProbeWhoami_HeaderCaseInsensitive(t *testing.T) {
 			mux := http.NewServeMux()
 			mux.HandleFunc("/whoami", func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set(tc.headerName, tc.headerValue)
-				json.NewEncoder(w).Encode(map[string]string{
+				_ = json.NewEncoder(w).Encode(map[string]string{
 					"name": "test",
 					"mac":  "00:00:00:00:00:00",
 					"fw":   "0.0.0",
@@ -153,7 +153,7 @@ func TestProbeWhoami_HeaderCaseInsensitive(t *testing.T) {
 func TestProbeWhoami_BodyParseError_Miss(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Witsaba-Device", "true")
-		w.Write([]byte("not json"))
+		_, _ = w.Write([]byte("not json"))
 	}))
 	defer srv.Close()
 

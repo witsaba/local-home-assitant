@@ -46,7 +46,7 @@ func TestDiscovery_HitEvents(t *testing.T) {
 		if err != nil {
 			return types.DiscoveryEvent{}, false, err
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		if resp.Header.Get("X-Witsaba-Device") != "true" {
 			return types.DiscoveryEvent{}, false, nil
 		}

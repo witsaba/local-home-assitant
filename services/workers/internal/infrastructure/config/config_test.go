@@ -126,10 +126,10 @@ func TestLoad_LogLevelCaseInsensitive(t *testing.T) {
 
 func TestLoad_EnvVarUnset_FallsBackToDefault(t *testing.T) {
 	// Ensure unset env vars fall back to defaults.
-	os.Unsetenv("DISCOVERY_INTERVAL_SECONDS")
-	os.Unsetenv("DISCOVERY_PROBE_TIMEOUT_MS")
-	os.Unsetenv("DISCOVERY_WORKER_POOL_SIZE")
-	os.Unsetenv("LOG_LEVEL")
+	_ = os.Unsetenv("DISCOVERY_INTERVAL_SECONDS")
+	_ = os.Unsetenv("DISCOVERY_PROBE_TIMEOUT_MS")
+	_ = os.Unsetenv("DISCOVERY_WORKER_POOL_SIZE")
+	_ = os.Unsetenv("LOG_LEVEL")
 
 	cfg, err := config.Load()
 	if err != nil {

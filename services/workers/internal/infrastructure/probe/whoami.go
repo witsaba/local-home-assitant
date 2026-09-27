@@ -31,7 +31,7 @@ func ProbeWithClient(target net.IP, timeout time.Duration, client *http.Client) 
 	if err != nil {
 		return types.DiscoveryEvent{}, false, fmt.Errorf("GET %s: %w", url, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if !hasWitsabaHeader(resp.Header) {
 		return types.DiscoveryEvent{}, false, nil
