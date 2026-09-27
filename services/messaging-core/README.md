@@ -202,6 +202,20 @@ To accept clients from other hosts, set `NATS_HOST=0.0.0.0` in `.env`
 auth and TLS are tracked follow-ups in this README, not part of this
 branch.
 
+### NATS hostname: docker service name
+
+`NATS_HOST` defaults to `messaging-core` — the docker service name.
+Because the compose file uses `network_mode: host` (so the worker can
+reach the LAN), Docker's service-name DNS does not apply. The compose
+file injects `extra_hosts: ["messaging-core:127.0.0.1"]` on every
+service, so `messaging-core` resolves to the host loopback via each
+container's `/etc/hosts`. The embedded NATS server therefore binds to
+`127.0.0.1:4222` on the host, and any client (e.g. a future worker
+using NATS) can connect with `nats://messaging-core:4222`.
+
+Verified locally on Mac dev host: `docker compose up -d`, then from
+the workers container, `nc -zv messaging-core 4222` reports open.
+
 ### Linux-only caveat
 
 `network_mode: host` on Docker Desktop (Mac/Windows) puts the

@@ -121,4 +121,5 @@ services/workers/README.md               ← Add "Docker" section
 | 7 | `4d935c5` | docs(messaging-core): Docker section (build, run, image details, remote clients caveat, linux-only) |
 | 8 | `02e09ff` | chore(workers): .dockerignore — same exclusions as messaging-core |
 | 9 | `7936afc` | feat(workers): multi-stage Dockerfile (golang:1.26.3-alpine3.23 -> alpine:3.23) |
-| 10 | (this commit) | docs(workers): Docker section (build, run, lan-discovery caveat, linux-only) |
+| 10 | `ecb22bc` | docs(workers): Docker section (build, run, lan-discovery caveat, linux-only) |
+| 11 | (this commit) | chore(compose): NATS_HOST defaults to "messaging-core" via extra_hosts (network_mode: host disables docker DNS) |

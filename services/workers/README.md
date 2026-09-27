@@ -280,6 +280,13 @@ DISCOVERY_WORKER_POOL_SIZE=128
 LOG_LEVEL=debug
 ```
 
+`NATS_HOST` and `NATS_PORT` are also forwarded to this service for
+future NATS clients (the v1 worker does not consume them yet). The
+default `NATS_HOST=messaging-core` resolves via the `extra_hosts`
+entry the compose file injects into this container's `/etc/hosts`,
+mapping `messaging-core` to `127.0.0.1` (the host loopback, where
+the embedded NATS server is bound under `network_mode: host`).
+
 ### LAN discovery — Linux-only caveat
 
 This is the critical constraint: **`network_mode: host` on Docker
