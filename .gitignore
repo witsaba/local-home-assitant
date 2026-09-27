@@ -2,3 +2,6 @@
 .atl/
 .codegraph/
 scripts/__pycache__/
+
+# Local docker-compose overrides. env.example is the template and IS tracked.
+.env
