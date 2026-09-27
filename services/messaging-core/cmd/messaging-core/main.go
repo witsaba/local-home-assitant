@@ -70,6 +70,24 @@ func run() int {
 	}
 
 	if err := srv.Start(ctx); err != nil {
+		// If the caller's context was cancelled (SIGINT/SIGTERM
+		// arrived during boot) we treat that as a graceful shutdown
+		// request rather than a startup failure.
+		if ctx.Err() != nil {
+			log.Info("startup cancelled by signal",
+				ports.Field{Key: "err", Value: err.Error()},
+			)
+			shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), shutdownTimeout)
+			defer cancelShutdown()
+			if err := srv.Shutdown(shutdownCtx); err != nil && !errors.Is(err, context.Canceled) {
+				log.Error("shutdown error",
+					ports.Field{Key: "err", Value: err.Error()},
+				)
+				return 1
+			}
+			log.Info("messaging-core stopped cleanly")
+			return 0
+		}
 		log.Error("starting NATS server failed",
 			ports.Field{Key: "err", Value: err.Error()},
 		)
