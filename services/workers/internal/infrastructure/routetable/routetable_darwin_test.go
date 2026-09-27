@@ -9,7 +9,8 @@ import (
 
 func TestParseRouteOutput_SingleInterface(t *testing.T) {
 	t.Parallel()
-	// Synthetic `route -n get default` output for Darwin.
+	// Synthetic `route -n get default` output for Darwin — interface
+	// line first. Parser must accept this order.
 	input := `   route to: default
 destination: default
        mask: default
@@ -27,6 +28,54 @@ destination: default
 	expected := net.ParseIP("192.168.1.1")
 	if !gw.Equal(expected) {
 		t.Errorf("expected gateway 192.168.1.1, got %v", gw)
+	}
+}
+
+func TestParseRouteOutput_RealMacOSOrder(t *testing.T) {
+	t.Parallel()
+	// Real macOS output — gateway: comes BEFORE interface:.
+	// This is the order the parser MUST handle; the previous
+	// order-dependent version silently dropped the gateway.
+	input := `   route to: default
+destination: default
+       mask: default
+    gateway: 192.168.1.1
+  interface: en1
+      flags: <UP,GATEWAY,DONE,STATIC,PRCLONING,GLOBAL>
+`
+	result := routetable.ParseRouteOutput([]byte(input))
+	if len(result) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(result))
+	}
+	gw, ok := result["en1"]
+	if !ok {
+		t.Fatal("expected gateway for en1 (real macOS interface name)")
+	}
+	expected := net.ParseIP("192.168.1.1")
+	if !gw.Equal(expected) {
+		t.Errorf("expected gateway 192.168.1.1, got %v", gw)
+	}
+}
+
+func TestParseRouteOutput_MissingInterface(t *testing.T) {
+	t.Parallel()
+	// gateway: present, interface: missing — must NOT produce a
+	// result with an empty key.
+	input := "  gateway: 192.168.1.1\n"
+	result := routetable.ParseRouteOutput([]byte(input))
+	if len(result) != 0 {
+		t.Errorf("expected 0 entries when interface is missing, got %d", len(result))
+	}
+}
+
+func TestParseRouteOutput_MissingGateway(t *testing.T) {
+	t.Parallel()
+	// interface: present, gateway: missing — must NOT produce a
+	// result with a nil IP.
+	input := "  interface: en0\n"
+	result := routetable.ParseRouteOutput([]byte(input))
+	if len(result) != 0 {
+		t.Errorf("expected 0 entries when gateway is missing, got %d", len(result))
 	}
 }
 

@@ -56,22 +56,27 @@ func parseDarwinDefaultRoute() (map[string]net.IP, error) {
 
 // ParseRouteOutput extracts interface name and gateway IP from the
 // output of `route -n get default`. Exposed for testing.
+//
+// Order-independent: on real macOS the gateway: line appears BEFORE
+// the interface: line, so we track each field as we see it and commit
+// a (iface, gw) pair at end-of-input (or whenever both are present).
+// macOS has exactly one default route so this is sufficient.
 func ParseRouteOutput(data []byte) map[string]net.IP {
 	result := make(map[string]net.IP)
+	var iface, gwStr string
 	scanner := bufio.NewScanner(bytes.NewReader(data))
-	var currentIface string
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
-		if strings.HasPrefix(line, "interface:") {
-			currentIface = strings.TrimSpace(strings.TrimPrefix(line, "interface:"))
+		switch {
+		case strings.HasPrefix(line, "interface:"):
+			iface = strings.TrimSpace(strings.TrimPrefix(line, "interface:"))
+		case strings.HasPrefix(line, "gateway:"):
+			gwStr = strings.TrimSpace(strings.TrimPrefix(line, "gateway:"))
 		}
-		if strings.HasPrefix(line, "gateway:") {
-			gwStr := strings.TrimSpace(strings.TrimPrefix(line, "gateway:"))
-			gw := net.ParseIP(gwStr)
-			if gw != nil && currentIface != "" {
-				result[currentIface] = gw
-				currentIface = ""
-			}
+	}
+	if iface != "" && gwStr != "" {
+		if gw := net.ParseIP(gwStr); gw != nil {
+			result[iface] = gw
 		}
 	}
 	return result
