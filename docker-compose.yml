@@ -42,9 +42,9 @@ volumes:
 services:
   postgres:
     # The shared witsaba database. pgvector is preinstalled in this image
-    # (pgvector/pgvector:pg16-trixie-slim) for future use; no vector
+    # (pgvector/pgvector:pg16-trixie) for future use; no vector
     # columns are created by this bootstrap. See odd/tasks/postgres-storage.md.
-    image: pgvector/pgvector:pg16-trixie-slim
+    image: pgvector/pgvector:pg16-trixie
     container_name: witsaba-postgres
     init: true                       # tini as PID 1 — clean signal handling
     network_mode: host               # see file header; bind to loopback only
