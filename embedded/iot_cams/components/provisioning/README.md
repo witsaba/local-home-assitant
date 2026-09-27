@@ -96,22 +96,23 @@ both with per-fleet values.
 
 ```
 +---------------------------------------------+
-| IoT-Cam-A1B2                          [WPA2]|
-| Wi-Fi setup                                  |
+|          Witsaba Cam Setup                   |
+|             iot-cam-A1B2                     |
+|                  [WPA2]                      |
 +---------------------------------------------+
 | Pick your home network. This device only    |
 | supports 2.4 GHz - if your router shows two  |
 | SSIDs, choose the 2.4 GHz one.              |
 +---------------------------------------------+
 | Network                                      |
-|   [BestNetwork |||| -45 dBm        v]        |
-|   [OtherNetwork |||  -58 dBm         ]       |
-|   [Neighbor-Net |    -72 dBm         ]       |
+|   [BestNetwork  ████             v]          |
+|   [OtherNetwork  ███░              ]         |
+|   [Neighbor-Net  █░░░              ]         |
 |   [- Hidden (type above) -           ]       |
 |   + Add hidden network manually              |
 |                                              |
 | Password                                     |
-|   [..............................]           |
+|   [....................] [Show]              |
 +---------------------------------------------+
 |        [ Rescan ]    [      Connect      ]   |
 +---------------------------------------------+
@@ -131,8 +132,15 @@ both with per-fleet values.
 | Dark mode via `prefers-color-scheme` | Operator configures at night |
 | `prefers-reduced-motion` honored | No animation regression if we add transitions later |
 | `:user-invalid` styled with `--e` | Browser-native flag for invalid fields without JS |
-| Device name substituted into `<title>` and `<h1>` | Operator knows which device they're configuring |
+| Device name substituted into `<h2>` (subtitle) | Operator knows which device they're configuring |
 | Verbose `ESP_LOGI`/`ESP_LOGW` in this file gated with `#if 0` | Flash budget for the log format strings |
+| **Round 2** | |
+| Brand title `Witsaba Cam Setup` as the h1, device name as h2 subtitle | Clear brand hierarchy; both lines centered |
+| Border-bottom separator on the header | Reads the title block as its own region |
+| More breathing room above the lede paragraph | Visual weight separates the header from the form |
+| Password show/hide toggle next to the input | Operator can verify the password before sending |
+| Server-side wifi bars in `/scan` JSON (`get_wifi_bars_meter`) | One less client-side computation; dBm dropped from display |
+| Drop the `dBm` suffix on dropdown entries | Operators do not read dBm at provisioning time |
 
 ---
 

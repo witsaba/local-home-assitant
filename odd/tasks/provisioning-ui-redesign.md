@@ -83,16 +83,18 @@ emissions so the flash footprint of the new build does not grow.
 Re-runnable via `python3 scripts/audit_captive_portal.py`. Baseline
 numbers below are computed against `HEAD~3` (pre-T1).
 
-| Metric | Before (HEAD~3) | After (this branch) | Delta |
-| --- | --- | --- | --- |
-| `HTML_FORM_BODY` length (bytes) | 5,257 | 5,591 | **+334 (+6.4%)** |
-| `captive_portal.c` total size | 27,312 | 30,149 | +2,837 (+10.4%) |
-| `ESP_LOG*` total (call sites in source) | 12 | 12 | 0 |
-| `ESP_LOG*` gated under `CAPTIVE_VERBOSE_LOG` | 0 | 6 | +6 |
-| `ESP_LOG*` actively compiled | 12 | 6 | **-6** (-50%) |
-| `<label class='lb' for='..'>` associations | 0 | 2 | +2 |
-| `aria-live='assertive\|polite'` regions | 0 | 2 | +2 |
-| `role='alert\|status'` regions | 0 | 2 | +2 |
+| Metric | Before (HEAD~3) | After round 1 | After round 2 | Total delta vs HEAD~3 |
+| --- | --- | --- | --- | --- |
+| `HTML_FORM_BODY` length (bytes) | 5,257 | 5,591 | 6,170 | **+913 (+17.4%)** |
+| `captive_portal.c` total size | 27,312 | 30,149 | 32,503 | +5,191 (+19.0%) |
+| `ESP_LOG*` total (call sites in source) | 12 | 12 | 12 | 0 |
+| `ESP_LOG*` gated under `CAPTIVE_VERBOSE_LOG` | 0 | 6 | 6 | +6 |
+| `ESP_LOG*` actively compiled | 12 | 6 | 6 | **-6** (-50%) |
+| `<label class='lb' for='..'>` associations | 0 | 2 | 2 | +2 |
+| `aria-live='assertive\|polite'` regions | 0 | 2 | 2 | +2 |
+| `role='alert\|status'` regions | 0 | 2 | 2 | +2 |
+| `iot_cams.bin` size (app partition, bytes) | n/a | 0xd4600 | 0xd4900 | n/a |
+| `iot_cams.bin` free in 1 MB partition | n/a | 175,104 B (16.7%) | 177,664 B (16.9%) | n/a |
 
 The C file grew 2.8 KB because the runtime `{deviceName}`
 substitution (≈25 lines of helper + the per-request malloc/free
@@ -127,6 +129,48 @@ whose Kconfig literal is `"iot-cam"` (8 bytes with NUL). GCC's
 that the bound exceeded the source size. Fixed by switching to
 `strlen()` — the Kconfig string type already bounds the length
 at build time.
+
+## Follow-up rounds
+
+The first 4 work-unit commits shipped the page on
+`feat/provisioning-ui-redesign`. Two follow-up rounds landed on
+the same branch after operator feedback on the device:
+
+### Round 2 (after operator ran the page on hardware)
+
+- [x] **R2-T1 — Server-side WiFi bars**
+  - Add `get_wifi_bars_meter(int8_t rssi)` helper in
+    `captive_portal.c`. Returns 4 UTF-8 block characters
+    representing signal strength (thresholds at -50 / -67 / -75 /
+    -85 dBm).
+  - `scan_get_handler` JSON now emits a `bars` field per
+    network. JS consumes it directly instead of computing locally.
+  - Display drops the dBm number — operators don't read it; the
+    bar meter is enough context.
+  - Delivered in commit `7d48bf3`.
+
+- [x] **R2-T2 — Header restructure + breathing room**
+  - h1 `Witsaba Cam Setup` (big, centered) + h2 `{deviceName}`
+    (smaller, centered) replaces the previous single-h1 header.
+  - Add a horizontal separator (border-bottom on the header) so
+    the title block reads as its own region.
+  - More margin between the header and the `Pick your home
+    network…` paragraph.
+  - Delivered in commit `8871033`.
+
+- [x] **R2-T3 — Password show/hide toggle**
+  - Small inline button next to the password input swaps
+    `type=password` ↔ `type=text`.
+  - Label flips `Show` ↔ `Hide` and `aria-label` updates so
+    screen readers announce the new state.
+  - Delivered in commit `8871033`.
+
+- [x] **R2-T4 — Build verify**
+  - `idf.py build` clean exit after the round 2 changes.
+  - Delivered in the same round 2 commits; binary size went from
+    0xd4600 (round 1) to 0xd4900 bytes (+768 B, +0.09%) for the
+    wifi_bars_meter function plus the longer JSON entries plus
+    the slightly larger HTML body.
 
 ## Tracking
 
