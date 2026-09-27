@@ -8,9 +8,10 @@
 # directory (i.e. an empty or never-created $PGDATA volume). Re-running
 # docker compose up against an existing volume will skip this entirely.
 #
-# It is idempotent at the role level via DO blocks: if pg-worker or
-# pg-messaging-core already exist, we UPDATE their passwords instead of
-# failing. Re-running it on a fresh DB is safe.
+# The roles are idempotent via CREATE ROLE IF NOT EXISTS: if pg-worker or
+# pg-messaging-core already exist, the statement is a no-op. Re-running
+# this script on a fresh DB is safe. For password rotation after the
+# volume is initialized, run ALTER ROLE manually against the container.
 #
 # Environment consumed (provided by docker-compose env:):
 #   PG_ADMIN_DB               — database to connect to for DDL (defaults to POSTGRES_DB)
@@ -40,7 +41,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PSQL=(psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$PG_ADMIN_DB")
 
 echo "[bootstrap] applying 02-roles.sql"
-"${PSQL[@]}" -f "$SCRIPT_DIR/02-roles.sql" \
+"${PSQL[@]}" -f "/docker-entrypoint-scripts/02-roles.sql" \
     -v "pg_worker_password=${PG_WORKER_PASSWORD}" \
     -v "pg_messaging_core_password=${PG_MESSAGING_CORE_PASSWORD}"
 

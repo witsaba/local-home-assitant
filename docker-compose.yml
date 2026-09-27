@@ -59,6 +59,7 @@ services:
     volumes:
       - witsaba-postgres-data:/var/lib/postgresql/data
       - ./services/postgres/init:/docker-entrypoint-initdb.d:ro
+      - ./services/postgres/scripts:/docker-entrypoint-scripts:ro
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-witsaba}
       POSTGRES_USER: ${POSTGRES_USER:-pg-admin}
