@@ -113,4 +113,5 @@ services/workers/README.md               ← Add "Docker" section
 | # | SHA       | Subject                                              |
 |---|-----------|------------------------------------------------------|
 | 1 | `7f834f0` | docs(plan): docker-compose for messaging-core + workers (linux target) |
-| 2 | (this commit) | chore(compose): add docker-compose.yml (two services, host network) |
+| 2 | `df463ee` | chore(compose): add docker-compose.yml (two services, host network) |
+| 3 | (this commit) | docs(env): add .env.example documenting every env var consumed |
