@@ -1,0 +1,54 @@
+# Docker Compose for the witsaba local-home-assitant stack.
+#
+# Target: Linux only. On Docker Desktop (Mac/Windows) `network_mode: host`
+# puts the container on the VM's network, NOT the host's LAN. The
+# workers discovery job will not see devices like 192.168.1.51 from
+# Mac dev. Validation deferred to a Linux host.
+#
+# Env overrides: drop a .env file next to this compose file. Every
+# variable below falls back to a sane default if .env is missing.
+
+name: witsaba-local-home
+
+services:
+  messaging-core:
+    build:
+      context: ./services/messaging-core
+      dockerfile: Dockerfile
+      args:
+        VERSION: ${VERSION:-0.1.0-dev}
+        GIT_HEAD: ${GIT_HEAD:-unknown}
+    image: witsaba/messaging-core:local
+    container_name: witsaba-messaging-core
+    init: true                       # tini as PID 1 — clean signal handling
+    network_mode: host               # see file header; Linux only
+    restart: unless-stopped
+    environment:
+      NATS_HOST: ${NATS_HOST:-127.0.0.1}
+      NATS_PORT: ${NATS_PORT:-4222}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    # NOTE on NATS_HOST: default 127.0.0.1 works with network_mode: host
+    # because the container shares the host's loopback. Once a remote
+    # client on another host needs to connect, set NATS_HOST=0.0.0.0
+    # here (and add NATS auth/TLS — tracked as a follow-up).
+
+  workers:
+    build:
+      context: ./services/workers
+      dockerfile: Dockerfile
+      args:
+        VERSION: ${VERSION:-0.1.0-dev}
+        GIT_HEAD: ${GIT_HEAD:-unknown}
+    image: witsaba/workers:local
+    container_name: witsaba-workers
+    init: true
+    network_mode: host
+    restart: unless-stopped
+    depends_on:
+      - messaging-core                # v1 worker does not talk to NATS yet;
+                                       # declared for intent / ordering
+    environment:
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      DISCOVERY_INTERVAL_SECONDS: ${DISCOVERY_INTERVAL_SECONDS:-60}
+      DISCOVERY_PROBE_TIMEOUT_MS: ${DISCOVERY_PROBE_TIMEOUT_MS:-1500}
+      DISCOVERY_WORKER_POOL_SIZE: ${DISCOVERY_WORKER_POOL_SIZE:-64}
