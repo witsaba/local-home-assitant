@@ -43,6 +43,7 @@
 #include "freertos/semphr.h"
 
 #include "captive_portal.h"
+#include "wifi_cred.h"
 
 static const char *TAG = "prov";
 
@@ -398,46 +399,14 @@ bool provisioning_is_provisioned(void)
         return false;
     }
 
-    /* Read directly from NVS rather than calling esp_wifi_get_config().
-     * The latter returns whatever is in the wifi driver's static
-     * s_config[] array, which is only populated after esp_wifi_init()
-     * runs (which reads from NVS into RAM). If app_main() calls this
-     * function before the wifi stack is initialised, esp_wifi_get_config
-     * returns an empty config and we fall into provisioning_run() even
-     * though credentials ARE in NVS — confirmed on device after a
-     * power cycle.
-     *
-     * The IDF wifi driver stores its config under namespace
-     * "nvs.net80211" with SEPARATE keys per field:
-     *   - sta.ssid[0]  (blob, up to 32 bytes)
-     *   - sta.pswd[0]  (blob, up to 64 bytes)
-     *   - sta.bssid[0] etc.
-     * It is NOT a single "config" blob. Verified against the
-     * wifi_nvs_config example in IDF v5.5.x. The [0] suffix is the
-     * multi-blob index key — espressif/esp-idf #14554. */
-    nvs_handle_t nvs;
-    esp_err_t err = nvs_open("nvs.net80211", NVS_READONLY, &nvs);
-    if (err != ESP_OK) {
-        /* Namespace missing or NVS not initialised — treat as
-         * not provisioned. The first-boot flow will create the
-         * namespace when provisioning_apply_captive_form() writes
-         * the credentials. */
-        return false;
-    }
-
-    uint8_t ssid[32] = {0};
-    size_t ssid_len = sizeof(ssid);
-    err = nvs_get_blob(nvs, "sta.ssid[0]", ssid, &ssid_len);
-    nvs_close(nvs);
-
-    if (err != ESP_OK) {
-        /* Key not found or read error — no credentials yet. */
-        return false;
-    }
-    /* An SSID of all zeros means the wifi driver wrote an empty
-     * config (first-boot state). Any non-zero first byte means a
-     * real SSID was persisted. */
-    return ssid[0] != '\0';
+    /* Read from our own NVS namespace "wifi_cred" (wifi_cred.c).
+     * This mirrors the esp32-cam-surveillance config.c pattern:
+     * we manage credential persistence explicitly rather than
+     * relying on the wifi driver's internal "nvs.net80211" storage.
+     * The wifi driver path was not surviving power cycles reliably.
+     * wifi_cred_is_saved() returns true iff "ssid" key is present
+     * and non-empty in the "wifi_cred" namespace. */
+    return wifi_cred_is_saved();
 }
 
 esp_err_t provisioning_run(void)
@@ -614,11 +583,39 @@ esp_err_t provisioning_join_ap(void)
         return r;
     }
 
-    /* Trigger the station attach. The credentials are already in
-     * NVS (we checked above), so the driver will read them and
-     * associate with the home AP. ESP_ERR_WIFI_CONN means the
-     * driver is already mid-connect (e.g., from a previous
-     * provisioning_apply_captive_form() call) — treat as success. */
+    /* Load credentials from our own NVS namespace "wifi_cred" and
+     * pass them to esp_wifi_set_config(). This mirrors the
+     * esp32-cam-surveillance wifi_init(cfg) pattern:
+     * wifi_init reads from its config_t (backed by NVS "config")
+     * and explicitly calls esp_wifi_set_config(). The driver does NOT
+     * auto-load stored credentials on esp_wifi_start() — it needs
+     * an explicit esp_wifi_set_config() call to know what to use. */
+    {
+        char ssid[33] = {0};
+        char password[65] = {0};
+        esp_err_t lr = wifi_cred_load(ssid, sizeof(ssid),
+                                      password, sizeof(password));
+        if (lr != ESP_OK) {
+            ESP_LOGE(TAG, "join_ap: wifi_cred_load: %s",
+                     esp_err_to_name(lr));
+            return lr;
+        }
+
+        wifi_config_t wifi_cfg = {0};
+        strncpy((char *)wifi_cfg.sta.ssid, ssid, sizeof(wifi_cfg.sta.ssid) - 1);
+        strncpy((char *)wifi_cfg.sta.password, password,
+                sizeof(wifi_cfg.sta.password) - 1);
+        wifi_cfg.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
+        r = esp_wifi_set_config(WIFI_IF_STA, &wifi_cfg);
+        if (r != ESP_OK) {
+            ESP_LOGE(TAG, "join_ap: esp_wifi_set_config: %s",
+                     esp_err_to_name(r));
+            return r;
+        }
+        ESP_LOGI(TAG, "join_ap: loaded ssid='%s' from NVS", ssid);
+    }
+
+    /* Trigger the station attach. */
     r = esp_wifi_connect();
     if (r != ESP_OK && r != ESP_ERR_WIFI_CONN) {
         ESP_LOGE(TAG, "join_ap: esp_wifi_connect: %s",
@@ -679,8 +676,22 @@ esp_err_t provisioning_apply_captive_form(const char *ssid, const char *password
                  esp_err_to_name(r));
         return r;
     }
-    ESP_LOGI(TAG, "apply_form: NVS-save OK: esp_wifi_set_config returned ESP_OK "
-                   "(driver has persisted credentials to nvs.net80211)");
+    /* CRITICAL: also save to our own NVS namespace "wifi_cred" (wifi_cred.c).
+     * This mirrors the esp32-cam-surveillance config_save() pattern.
+     * The wifi driver's internal "nvs.net80211" storage was NOT surviving
+     * power cycles reliably on this device. Explicit manual persistence is
+     * the only path that works. */
+    {
+        esp_err_t sv = wifi_cred_save(ssid, password);
+        if (sv != ESP_OK) {
+            ESP_LOGE(TAG, "apply_form: wifi_cred_save failed: %s",
+                     esp_err_to_name(sv));
+            return sv;
+        }
+        ESP_LOGI(TAG, "apply_form: wifi_cred_save OK");
+    }
+
+    ESP_LOGI(TAG, "apply_form: NVS-save OK: esp_wifi_set_config returned ESP_OK");
 
     /* Kick off the station connect. In APSTA mode this only
      * affects the STA side; the softAP stays up so the
