@@ -162,6 +162,17 @@ esp_err_t provisioning_join_ap(void);
 esp_err_t provisioning_apply_captive_form(const char *ssid,
                                          const char *password);
 
+/* Returns true when the station has received a DHCP lease from the
+ * home AP (IP_EVENT_STA_GOT_IP fired). Used by app_main to know
+ * it is safe to shut down the softAP. The flag is set by the IP
+ * event handler and reset by provisioning_reset_sta_state(). */
+bool provisioning_sta_has_ip(void);
+
+/* Resets the station state (s_sta_got_ip, s_consecutive_failures)
+ * before starting a fresh provisioning session. Prevents retry state
+ * from a previous session bleeding into the new one. */
+void provisioning_reset_sta_state(void);
+
 #ifdef __cplusplus
 }
 #endif

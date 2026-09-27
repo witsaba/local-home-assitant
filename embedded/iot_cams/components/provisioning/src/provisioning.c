@@ -38,6 +38,7 @@
 #include "nvs_flash.h"
 #include "mdns.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "freertos/semphr.h"
 
 #include "captive_portal.h"
@@ -51,6 +52,16 @@ static struct {
     bool      run_in_progress;
     char      service_name[PROV_NAME_MAX_LEN + 1];
 } s_prov;
+
+/* Retry state for station disconnection. Mirrors the
+ * esp32-cam-surveillance wifi_event.c pattern:
+ * - s_consecutive_failures: counts disconnects; reset on GOT_IP.
+ * - s_retry_count: bounded retry counter (max 5 attempts).
+ * - s_sta_got_ip: set true when IP_EVENT_STA_GOT_IP fires.
+ *   Used by app_main to know when it's safe to shut down the softAP. */
+static volatile bool s_sta_got_ip = false;
+static volatile uint32_t s_consecutive_failures = 0;
+#define MAX_RETRY 5
 
 /* FreeRTOS semaphore that provisioning_run() blocks on.
  * Signalled by the captive POST /provision handler when
@@ -115,6 +126,9 @@ const char *internal_prov_ssid(void)
 static void sta_got_ip_event_handler(void *arg, esp_event_base_t event_base,
                                     int32_t event_id, void *event_data);
 
+static void sta_disconnected_event_handler(void *arg, esp_event_base_t event_base,
+                                            int32_t event_id, void *event_data);
+
 /* Operator-visible "we joined the home AP" log line. Fires on
  * every successful station DHCP lease — the post-provisioning
  * attach, every subsequent reboot that re-joins, and any
@@ -153,12 +167,77 @@ static void sta_got_ip_event_handler(void *arg, esp_event_base_t event_base,
         ssid[sizeof(ssid) - 1] = '\0';
     }
 
+    /* Mark that we got an IP — used by app_main to know
+     * it's safe to shut down the softAP. Reset failure counter
+     * (mirrors esp32-cam-surveillance wifi_event.c pattern). */
+    s_sta_got_ip = true;
+    s_consecutive_failures = 0;
+
     ESP_LOGI(TAG, "station connected to \"%s\": ip=" IPSTR
                   " netmask=" IPSTR " gw=" IPSTR,
              ssid,
              IP2STR(&ip_info->ip),
              IP2STR(&ip_info->netmask),
              IP2STR(&ip_info->gw));
+}
+
+/* Fires on WIFI_EVENT_STA_DISCONNECTED. Mirrors the
+ * esp32-cam-surveillance wifi_event.c pattern:
+ * - Bump failure counter.
+ * - Retry up to MAX_RETRY times with exponential backoff.
+ * - Log the disconnect reason so the operator can see why
+ *   the device is falling back to softAP.
+ *
+ * The handler is registered in softap_bring_up() so it's
+ * armed before any esp_wifi_connect() call. */
+static void sta_disconnected_event_handler(void *arg, esp_event_base_t event_base,
+                                            int32_t event_id, void *event_data)
+{
+    (void)arg;
+    if (event_base != WIFI_EVENT || event_id != WIFI_EVENT_STA_DISCONNECTED) {
+        return;
+    }
+
+    wifi_event_sta_disconnected_t *disc = (wifi_event_sta_disconnected_t *)event_data;
+    ESP_LOGW(TAG, "station disconnected from home AP: reason=%d (%s)",
+             disc->reason,
+             esp_err_to_name(disc->reason));
+
+    /* Only retry if we haven't already gotten an IP (i.e., this is
+     * a transient failure, not a complete loss of credentials). */
+    if (s_sta_got_ip) {
+        ESP_LOGI(TAG, "disconnected after IP was acquired — NOT retrying "
+                      "(will rely on app_main to handle)");
+        return;
+    }
+
+    s_consecutive_failures++;
+    if (s_consecutive_failures > MAX_RETRY) {
+        ESP_LOGW(TAG, "max retry (%u) exceeded — falling back to softAP",
+                 (unsigned)MAX_RETRY);
+        return;
+    }
+
+    /* Exponential backoff: 2/4/8/16/30 s capped.
+     * This mirrors esp32-cam-surveillance wifi_event.c. */
+    uint32_t delay_ms;
+    if (s_consecutive_failures == 1)      delay_ms = 2000;
+    else if (s_consecutive_failures == 2) delay_ms = 4000;
+    else if (s_consecutive_failures == 3) delay_ms = 8000;
+    else if (s_consecutive_failures == 4) delay_ms = 16000;
+    else                                  delay_ms = 30000;
+
+    ESP_LOGI(TAG, "retry %u/%u in %ums...",
+             (unsigned)s_consecutive_failures,
+             (unsigned)MAX_RETRY,
+             (unsigned)delay_ms);
+
+    vTaskDelay(pdMS_TO_TICKS(delay_ms));
+    esp_err_t r = esp_wifi_connect();
+    if (r != ESP_OK && r != ESP_ERR_WIFI_CONN) {
+        ESP_LOGE(TAG, "sta_disconnected: esp_wifi_connect: %s",
+                 esp_err_to_name(r));
+    }
 }
 
 static esp_err_t softap_bring_up(void)
@@ -185,6 +264,13 @@ static esp_err_t softap_bring_up(void)
      * provisioning branch). */
     esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP,
                                 sta_got_ip_event_handler, NULL);
+
+    /* Register WIFI_EVENT_STA_DISCONNECTED to handle transient
+     * home-AP disconnects with retry (mirrors esp32-cam-surveillance
+     * wifi_event.c pattern). Idempotent — safe to call on repeat
+     * bring-ups. */
+    esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED,
+                                sta_disconnected_event_handler, NULL);
 
     esp_netif_t *ap_netif = esp_netif_create_default_wifi_ap();
     if (ap_netif == NULL) {
@@ -541,6 +627,25 @@ esp_err_t provisioning_join_ap(void)
 
     ESP_LOGI(TAG, "join_ap: station connecting (credentials from NVS)");
     return ESP_OK;
+}
+
+/* Expose the IP-acquired state to app_main.
+ * s_sta_got_ip is set true by sta_got_ip_event_handler()
+ * when IP_EVENT_STA_GOT_IP fires, and reset by
+ * provisioning_reset_sta_state(). Used by app_main to know
+ * when it is safe to shut down the softAP. */
+bool provisioning_sta_has_ip(void)
+{
+    return s_sta_got_ip;
+}
+
+/* Reset the station state. Called before starting a fresh
+ * provisioning session so the retry/disconnect state from a
+ * previous session does not bleed into the new one. */
+void provisioning_reset_sta_state(void)
+{
+    s_sta_got_ip = false;
+    s_consecutive_failures = 0;
 }
 
 /* Called by the captive /provision handler when the operator's

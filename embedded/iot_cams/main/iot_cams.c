@@ -75,58 +75,6 @@ static void ip_handler(void *arg, esp_event_base_t ev_base,
     xEventGroupSetBits(ev, GOT_IP_BIT);
 }
 
-/* Bit set by sta_connected_handler when WIFI_EVENT_STA_CONNECTED
- * fires — meaning the station has finished L2 association with
- * the home AP. We shut down the softAP at this point because the
- * operator's phone is no longer needed once the form is posted. */
-#define STA_CONNECTED_BIT  (1u << 1)
-
-/* Forward declaration for the L2 connection handler. */
-static void sta_connected_handler(void *arg, esp_event_base_t ev_base,
-                                  int32_t ev_id, void *ev_data);
-
-/* Fires when the station's wifi driver confirms L2 association
- * with the home AP (the `wifi:connected with <ssid>` log line).
- * Sets the event group bit so the caller can shut down the
- * softAP at this point instead of waiting for DHCP. */
-static void sta_connected_handler(void *arg, esp_event_base_t ev_base,
-                                  int32_t ev_id, void *ev_data)
-{
-    (void)ev_base;
-    (void)ev_data;
-
-    if (ev_id != WIFI_EVENT_STA_CONNECTED) return;
-    EventGroupHandle_t ev = (EventGroupHandle_t)arg;
-    xEventGroupSetBits(ev, STA_CONNECTED_BIT);
-}
-
-/* Wait up to 30 s for WIFI_EVENT_STA_CONNECTED — the wifi-driver
- * confirmation that the station has finished L2 association with
- * the home AP. Used by the post-provisioning path to decide when
- * it is safe to shut down the softAP. */
-static void wait_for_sta_connected(const char *label)
-{
-    StaticEventGroup_t ev_group_buf = {0};
-    EventGroupHandle_t ev_group = xEventGroupCreateStatic(&ev_group_buf);
-
-    esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_STA_CONNECTED,
-                               sta_connected_handler, ev_group);
-
-    EventBits_t bits = xEventGroupWaitBits(
-        ev_group, STA_CONNECTED_BIT, pdTRUE, pdFALSE,
-        pdMS_TO_TICKS(30000));
-
-    if (bits & STA_CONNECTED_BIT) {
-        ESP_LOGI(TAG, "%s: station L2 connected to home AP", label);
-    } else {
-        ESP_LOGW(TAG, "%s: WIFI_EVENT_STA_CONNECTED timed out", label);
-    }
-
-    esp_event_handler_unregister(WIFI_EVENT, WIFI_EVENT_STA_CONNECTED,
-                                 sta_connected_handler);
-    vEventGroupDelete(ev_group);
-}
-
 /* Wait up to 30 s for the station to receive a DHCP lease from the
  * home AP, then log the assigned IPv4 address.
  *
@@ -212,6 +160,12 @@ void app_main(void)
         }
     }
 
+    /* Reset station state before entering the provisioning branch.
+     * Clears s_sta_got_ip and s_consecutive_failures so the
+     * disconnection handler in provisioning.c uses retry logic
+     * from a clean slate during this provisioning session. */
+    provisioning_reset_sta_state();
+
     ESP_LOGI(TAG, "no credentials in NVS — starting SoftAP provisioning");
     r = provisioning_run();
     if (r != ESP_OK) {
@@ -220,32 +174,46 @@ void app_main(void)
     }
 
     /* Provisioning succeeded. Credentials are committed to NVS.
-     * The station already attempted to connect when the captive form
-     * called esp_wifi_connect() inside provisioning_apply_captive_form().
-     * We MUST NOT call esp_wifi_connect() again here — the driver
-     * returns ESP_ERR_WIFI_CONN ("sta is connecting, return error")
-     * because the previous connect is still in flight. Just wait
-     * for the L2 connection so we can shut down the softAP, then
-     * wait for the DHCP lease. */
-    wait_for_sta_connected("post-provisioning");
+     * The station has already attempted to connect when the captive
+     * form called esp_wifi_connect() inside provisioning_apply_
+     * captive_form(). The disconnection handler (WIFI_EVENT_STA_
+     * DISCONNECTED) will retry with exponential backoff (up to 5
+     * attempts) if the home AP drops the connection.
+     *
+     * WAIT FOR IP BEFORE SHUTTING DOWN THE softAP — this mirrors
+     * esp32-cam-surveillance wifi_event.c: the softAP is torn down
+     * only when IP_EVENT_STA_GOT_IP fires (not on WIFI_EVENT_STA_
+     * CONNECTED which fires at L2 association, before DHCP).
+     * Shutting down on L2-assoc was too early: the home AP sometimes
+     * deauths the ESP32 before the DHCP lease completes, and without
+     * the softAP running the device had no recovery path. */
+    ESP_LOGI(TAG, "post-provisioning: waiting for DHCP lease from home AP...");
+    StaticEventGroup_t ev_group_buf = {0};
+    EventGroupHandle_t ev_group = xEventGroupCreateStatic(&ev_group_buf);
+    esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP,
+                               ip_handler, ev_group);
+    EventBits_t bits = xEventGroupWaitBits(
+        ev_group, GOT_IP_BIT, pdTRUE, pdFALSE,
+        pdMS_TO_TICKS(60000));
+    esp_event_handler_unregister(IP_EVENT, IP_EVENT_STA_GOT_IP,
+                                ip_handler);
+    if (!(bits & GOT_IP_BIT)) {
+        ESP_LOGW(TAG, "post-provisioning: DHCP lease timed out — "
+                      "softAP stays up; device will retry from app");
+    } else {
+        ESP_LOGI(TAG, "post-provisioning: DHCP lease acquired — shutting down softAP");
+    }
+    vEventGroupDelete(ev_group);
 
-    /* Shutdown the softAP NOW — the station has confirmed L2
-     * association with the home AP, so the operator's phone is
-     * no longer needed. Switch from APSTA to STA-only so the
-     * device stops beaconing. The DHCP lease may still be in
-     * flight on the station netif; that's fine — it completes
-     * asynchronously after the AP is gone. */
-    ESP_LOGI(TAG, "post-provisioning: shutting down softAP (STA-only)");
+    /* Now shut down the softAP. The station is already connected
+     * and has an IP. The disconnection handler will retry if needed
+     * (s_sta_got_ip=true means it won't retry but the app could
+     * use provisioning_join_ap() for an explicit reconnect). */
     r = esp_wifi_set_mode(WIFI_MODE_STA);
     if (r != ESP_OK) {
         ESP_LOGE(TAG, "post-provisioning: esp_wifi_set_mode(STA): %s",
                  esp_err_to_name(r));
     }
-
-    /* Wait for the DHCP lease and log the assigned IP. The station
-     * netif was created in softap_bring_up() so the DHCP client
-     * runs on the station interface after L2 association. */
-    wait_for_sta_ip_and_log("post-provisioning");
 
     ESP_LOGI(TAG, "post-provisioning: entering supervisor loop");
     while (1) {
