@@ -19,9 +19,9 @@ type Scheduler struct {
 	emit   func(types.DiscoveryEvent)
 	logger *zap.Logger
 
-	done    chan struct{}
-	stopMu  sync.Mutex
-	stop    context.CancelFunc
+	done   chan struct{}
+	stopMu sync.Mutex
+	stop   context.CancelFunc
 }
 
 // New returns a Scheduler that will run the supplied jobs. The same emit

@@ -11,8 +11,8 @@ import (
 
 type minimalJob struct{}
 
-func (j *minimalJob) Name() string                              { return "minimal" }
-func (j *minimalJob) Interval() time.Duration                  { return time.Second }
+func (j *minimalJob) Name() string            { return "minimal" }
+func (j *minimalJob) Interval() time.Duration { return time.Second }
 func (j *minimalJob) Run(ctx context.Context, emit func(types.DiscoveryEvent)) error {
 	<-ctx.Done()
 	return ctx.Err()

@@ -140,7 +140,7 @@ func noopEmit() func(types.DiscoveryEvent) {
 
 type panickingJob struct{ name string }
 
-func (j *panickingJob) Name() string             { return j.name }
+func (j *panickingJob) Name() string            { return j.name }
 func (j *panickingJob) Interval() time.Duration { return time.Millisecond }
 func (j *panickingJob) Run(_ context.Context, _ func(types.DiscoveryEvent)) error {
 	panic("intentional panic in test")
@@ -152,7 +152,7 @@ type countingJob struct {
 	interval time.Duration
 }
 
-func (j *countingJob) Name() string             { return j.name }
+func (j *countingJob) Name() string            { return j.name }
 func (j *countingJob) Interval() time.Duration { return j.interval }
 func (j *countingJob) Run(_ context.Context, _ func(types.DiscoveryEvent)) error {
 	j.runCount.Add(1)
@@ -164,7 +164,7 @@ type emitJob struct {
 	interval time.Duration
 }
 
-func (j *emitJob) Name() string { return j.name }
+func (j *emitJob) Name() string            { return j.name }
 func (j *emitJob) Interval() time.Duration { return j.interval }
 func (j *emitJob) Run(_ context.Context, emit func(types.DiscoveryEvent)) error {
 	emit(types.DiscoveryEvent{Name: "evicted", SourceIP: "10.0.0.1"})
