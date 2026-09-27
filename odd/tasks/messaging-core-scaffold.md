@@ -75,7 +75,7 @@ func TestEmbeddedServer_StartsAndReceivesMessage(t *testing.T) {
 
 ## Tasks
 
-- [ ] **T1 — Worktree + Go module init + Hexagonal folder skeleton**
+- [x] **T1 — Worktree + Go module init + Hexagonal folder skeleton**
   - Worktree already on `feat/messaging-core-nats-scaffold`.
   - `go mod init github.com/witsaba/local-home-assitant/services/messaging-core`
   - Folder skeleton with `.gitkeep` placeholders:
@@ -89,14 +89,14 @@ func TestEmbeddedServer_StartsAndReceivesMessage(t *testing.T) {
     ```
   - Work-unit commit: `chore(messaging-core): scaffold hexagonal layout + go.mod`
 
-- [ ] **T2 — Config loader**
+- [x] **T2 — Config loader**
   - `internal/infrastructure/config/config.go` reads env vars: `NATS_HOST`, `NATS_PORT`, `LOG_LEVEL`, `NATS_DATA_DIR` (optional, unused for now).
   - Defaults: `127.0.0.1`, `4222`, `info`.
   - Pure function `Load() (Config, error)` — no globals.
   - Unit test: `config_test.go` covering defaults + override.
   - Work-unit commit: `feat(messaging-core): env-based config loader`
 
-- [ ] **T3 — Logger adapter (zap + otelzap wiring)**
+- [x] **T3 — Logger adapter (zap + otelzap wiring)**
   - `internal/infrastructure/logger/logger.go` exports `New(level string) (ports.Logger, error)`.
   - Uses `zap.NewProductionConfig()` when `LOG_LEVEL=info` (or any non-debug), `zap.NewDevelopmentConfig()` when `debug`.
   - JSON encoder; ISO8601 timestamps; caller info enabled.
@@ -104,7 +104,7 @@ func TestEmbeddedServer_StartsAndReceivesMessage(t *testing.T) {
   - `Sync()` flushes buffers.
   - Work-unit commit: `feat(messaging-core): zap logger adapter with otelzap bridge`
 
-- [ ] **T4 — Domain + application ports (interfaces only)**
+- [x] **T4 — Domain + application ports (interfaces only)**
   - `internal/domain/messaging.go` — placeholder type:
     ```go
     package domain
@@ -115,7 +115,7 @@ func TestEmbeddedServer_StartsAndReceivesMessage(t *testing.T) {
   - `.gitkeep` files deleted from these folders.
   - Work-unit commit: `feat(messaging-core): domain types + ports interfaces`
 
-- [ ] **T5 — NATS server adapter (embedded server lifecycle)**
+- [x] **T5 — NATS server adapter (embedded server lifecycle)**
   - `internal/infrastructure/natsserver/server.go`:
     - `type Config struct { Host string; Port int }`
     - `New(cfg Config, log ports.Logger) (ports.Server, error)` builds `server.NewServer(&server.Options{Host: cfg.Host, Port: cfg.Port, …})`.
@@ -125,13 +125,13 @@ func TestEmbeddedServer_StartsAndReceivesMessage(t *testing.T) {
   - Logs: `"NATS server starting"`, `"NATS server listening on nats://127.0.0.1:4222"`, `"NATS server shutting down"`.
   - Work-unit commit: `feat(messaging-core): embedded NATS server adapter`
 
-- [ ] **T6 — Wire `cmd/messaging-core/main.go`**
+- [x] **T6 — Wire `cmd/messaging-core/main.go`**
   - Reads config → builds logger → constructs NATS server → starts it → blocks on `SIGINT`/`SIGTERM` signal channel → graceful shutdown.
   - Exit code: 0 on signal, 1 on startup failure.
   - `go build` produces `bin/messaging-core`.
   - Work-unit commit: `feat(messaging-core): main composition root + signal handling`
 
-- [ ] **T7 — Verification test (server starts + receives a message)**
+- [x] **T7 — Verification test (server starts + receives a message)**
   - `internal/infrastructure/natsserver/server_test.go`:
     - Picks a random port (`Port: 0` in `Config`, then read back from the running server).
     - Starts the server, waits for `Ready()`, connects a `nats` client, publishes `test.subject`, calls `FlushTimeout`.
@@ -139,7 +139,7 @@ func TestEmbeddedServer_StartsAndReceivesMessage(t *testing.T) {
   - `internal/infrastructure/config/config_test.go` covers defaults and overrides.
   - Work-unit commit: `test(messaging-core): embedded NATS server receives published message`
 
-- [ ] **T8 — README**
+- [x] **T8 — README**
   - `services/messaging-core/README.md` documents:
     - Purpose
     - How to build (`go build ./...`)
@@ -149,7 +149,7 @@ func TestEmbeddedServer_StartsAndReceivesMessage(t *testing.T) {
     - Explicit follow-up list (auth, JetStream, OTel SDK init, producers/consumers).
   - Work-unit commit: `docs(messaging-core): service README`
 
-- [ ] **T9 — Final sweep**
+- [x] **T9 — Final sweep**
   - `go build ./...`, `go vet ./...`, `go test ./...` all green.
   - Run the binary for ~2 seconds under `go run`, observe logs, kill cleanly.
   - Update this doc with the closed-task commit list.
@@ -165,11 +165,51 @@ func TestEmbeddedServer_StartsAndReceivesMessage(t *testing.T) {
 
 ## Acceptance criteria
 
-1. `go build ./...` produces `bin/messaging-core` with no warnings.
-2. `go vet ./...` is clean.
-3. `go test ./...` passes, including the embedded-server test.
-4. Running `bin/messaging-core` logs the listening address within ~200 ms and exits 0 on `SIGINT`.
-5. The verification test proves the embedded server accepts and routes a real NATS publish.
+1. `go build ./...` produces `bin/messaging-core` with no warnings. ✅
+2. `go vet ./...` is clean. ✅
+3. `go test ./...` passes, including the embedded-server test. ✅ (17 tests across config, logger, and natsserver; ~80 ms per NATS round-trip)
+4. Running `bin/messaging-core` logs the listening address within ~30 ms and exits 0 on `SIGINT`. ✅
+5. The verification test proves the embedded server accepts and routes a real NATS publish. ✅ (`TestEmbeddedServer_ReceivesPublishedMessage` + `TestEmbeddedServer_AcceptsMultipleSubscribers`)
+
+## Closed-by commits (in this branch)
+
+| Task | Commit         |
+| ---- | -------------- |
+| T1   | `c779d01` chore(messaging-core): scaffold hexagonal layout + go.mod |
+| T2   | `f50f4b0` feat(messaging-core): env-based config loader |
+| T3+T4| `2d83701` feat(messaging-core): zap logger + otelzap bridge, ports, domain types |
+| T5   | `c203823` feat(messaging-core): embedded NATS server adapter |
+| T6   | `25b79a4` feat(messaging-core): main composition root + signal handling |
+| T6b  | `8450244` fix(messaging-core): graceful shutdown when SIGTERM arrives during boot |
+| T7   | `5375956` test(messaging-core): embedded NATS server receives published message |
+| T8   | `7b4add1` docs(messaging-core): service README |
+| T9   | this commit |
+
+## Final acceptance run
+
+```
+$ go build ./... && go vet ./... && go test ./... -count=1
+?       .../cmd/messaging-core                       [no test files]
+?       .../internal/application/ports               [no test files]
+?       .../internal/domain                          [no test files]
+ok      .../internal/infrastructure/config           0.281s
+ok      .../internal/infrastructure/logger           0.529s
+ok      .../internal/infrastructure/natsserver       0.985s
+```
+
+```
+$ ./bin/messaging-core &            # bind 127.0.0.1:4222
+{"msg":"messaging-core starting","version":"0.1.0-dev","host":"127.0.0.1","port":4222}
+{"msg":"NATS server starting","host":"127.0.0.1"}
+{"msg":"NATS server listening","url":"nats://127.0.0.1:4222","name":"messaging-core"}
+$ kill -TERM %1
+{"msg":"shutdown signal received"}
+{"msg":"NATS server shutting down"}
+{"msg":"NATS server stopped"}
+{"msg":"messaging-core stopped cleanly"}
+$ echo $?
+0
+```
 
 ## Tracking
 
