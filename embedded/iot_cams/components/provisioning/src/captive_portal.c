@@ -100,32 +100,38 @@ static esp_err_t default_captive_handler(httpd_req_t *req, httpd_err_code_t err)
  * fine on a fresh bring-up). Hand-rolled to keep cJSON out
  * of the hot path for what is fundamentally a static page.
  *
- * The page is intentionally lean (currently ~5.8 KB). It is
- * compiled into the firmware's .rodata so every byte counts.
- * JavaScript is limited to the network dropdown (scan, dedup,
- * sort, submit guard) — the form itself is a native POST so
- * the /provision handler can keep its existing form-urlencoded
- * contract unchanged. */
+ * The page is intentionally lean (currently ~6.1 KB after the
+ * password show/hide toggle, the centered title restructure,
+ * and the server-side wifi bars landed). It is compiled into
+ * the firmware's .rodata so every byte counts. JavaScript is
+ * limited to the network dropdown (scan, dedup, sort, submit
+ * guard) and the password show/hide toggle — the form itself is
+ * a native POST so the /provision handler can keep its existing
+ * form-urlencoded contract unchanged. */
 static const char *HTML_FORM_BODY =
 "<!DOCTYPE html><html lang='en'><head>"
 "<meta charset='utf-8'>"
 "<meta name='viewport' content='width=device-width,initial-scale=1'>"
 "<meta name='theme-color' content='#0b1220'>"
-"<title>{deviceName} - Wi-Fi setup</title>"
+"<title>Witsaba Cam Setup</title>"
 "<style>"
 ":root{--b:#f5f7fb;--f:#0b1220;--m:#5b6478;--l:#d8dce5;--p:#1f6feb;--w:#fff;--o:#16a34a;--e:#dc2626}"
 "@media(prefers-color-scheme:dark){:root{--b:#0b1220;--f:#e6e9ef;--m:#9aa3b2;--l:#2a3344;--p:#58a6ff;--w:#0b1220}.er{background:#3a1414;border-color:#5a2222}.ok{background:#0f2a17;border-color:#1c4426}}"
 "@media(prefers-reduced-motion:reduce){*,::before,::after{animation-duration:.01ms!important;transition-duration:.01ms!important}}"
 "*{box-sizing:border-box}"
 "html,body{margin:0;background:var(--b);color:var(--f);font:16px/1.45 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif}"
-"main{max-width:32rem;margin:0 auto;padding:1rem}"
-"h1{font-size:1.05rem;margin:.25rem 0 .25rem;font-weight:600}"
-"h1 small{display:block;color:var(--m);font-weight:400;font-size:.78rem;margin-top:.1rem}"
-".bg{float:right;font-size:.7rem;color:var(--m);border:1px solid var(--l);border-radius:999px;padding:.15rem .55rem}"
-"p.l{margin:.25rem 0 1rem;color:var(--m);font-size:.88rem}p.l b{color:var(--f)}"
-"form{border:1px solid var(--l);border-radius:12px;padding:1rem}"
-".r{margin-bottom:.85rem}.r:last-of-type{margin-bottom:0}"
+"main{max-width:32rem;margin:0 auto;padding:1.25rem 1rem 2rem}"
+"header{text-align:center;margin:0 0 1.5rem;padding-bottom:1.25rem;border-bottom:1px solid var(--l)}"
+"h1{font-size:1.5rem;margin:0;font-weight:700;color:var(--p)}"
+"h2{font-size:.95rem;margin:.35rem 0 0;font-weight:500;color:var(--m)}"
+".bg{font-size:.7rem;color:var(--m);border:1px solid var(--l);border-radius:999px;padding:.15rem .55rem;display:inline-block;margin-top:.6rem}"
+"p.l{margin:0 0 1.5rem;color:var(--m);font-size:.95rem;line-height:1.5}p.l b{color:var(--f)}"
+"form{border:1px solid var(--l);border-radius:12px;padding:1.25rem}"
+".r{margin-bottom:1rem}.r:last-of-type{margin-bottom:0}"
 "label.lb{display:block;font-size:.8rem;font-weight:600;color:var(--m);margin-bottom:.3rem}"
+".pw{display:flex;gap:.4rem}"
+".pw input{flex:1}"
+".pw button{flex:0 0 auto;padding:.7rem .85rem;font-size:.85rem;color:var(--m);background:transparent;border:1px solid var(--l);border-radius:8px;cursor:pointer}"
 "select,input[type=text],input[type=password]{width:100%;padding:.7rem;font:inherit;color:var(--f);background:var(--b);border:1px solid var(--l);border-radius:8px}"
 "select:focus,input:focus,button:focus{outline:2px solid var(--p);outline-offset:1px;border-color:var(--p)}"
 "input:user-invalid{border-color:var(--e)}"
@@ -134,15 +140,19 @@ static const char *HTML_FORM_BODY =
 "details>summary::before{content:'+ ';font-weight:700}"
 "details[open]>summary::before{content:'- '}"
 "details input{margin-top:.4rem}"
-".bn{display:flex;gap:.5rem;margin-top:1rem}"
-"button{font:inherit;font-weight:600;padding:.75rem 1rem;border-radius:8px;border:1px solid transparent;cursor:pointer}"
+".bn{display:flex;gap:.5rem;margin-top:1.25rem}"
+"button{font:inherit;font-weight:600;padding:.85rem 1rem;border-radius:8px;border:1px solid transparent;cursor:pointer}"
 ".pr{background:var(--p);color:var(--w);flex:2}.pr:disabled{opacity:.55;cursor:not-allowed}"
 ".se{background:transparent;color:var(--f);border-color:var(--l);flex:1}"
 ".ms{margin-top:1rem;padding:.7rem .9rem;border-radius:8px;font-size:.85rem;display:none}"
 ".er{background:#fde8e8;color:var(--e);border:1px solid #f5b5b5}"
 ".ok{background:#e8f7ec;color:var(--o);border:1px solid #b5e1bf}"
 "</style></head><body><main>"
-"<h1>{deviceName}<small>Wi-Fi setup</small><span class='bg' aria-label='WPA2 encrypted'>WPA2</span></h1>"
+"<header>"
+"<h1>Witsaba Cam Setup</h1>"
+"<h2>{deviceName}</h2>"
+"<span class='bg' aria-label='WPA2 encrypted'>WPA2</span>"
+"</header>"
 "<p class='l'>Pick your home network. <b>This device only supports 2.4 GHz</b> - if your router shows two SSIDs, choose the 2.4 GHz one.</p>"
 "<form method='POST' action='/provision' novalidate>"
 "<div class='r'>"
@@ -153,7 +163,10 @@ static const char *HTML_FORM_BODY =
 "</div>"
 "<div class='r'>"
 "<label class='lb' for='password'>Password</label>"
+"<div class='pw'>"
 "<input type='password' id='password' name='password' minlength='8' maxlength='64' autocomplete='current-password' required>"
+"<button type='button' id='pwshow' aria-label='Show password' aria-pressed='false'>Show</button>"
+"</div>"
 "</div>"
 "<div class='bn'>"
 "<button class='se' type='button' id='rescan'>Rescan</button>"
@@ -164,17 +177,17 @@ static const char *HTML_FORM_BODY =
 "</form>"
 "<script>"
 "(function(){"
-"var s=document.getElementById('ssid'),h=document.getElementById('ssid_h'),p=document.getElementById('password'),b=document.getElementById('rescan'),e=document.getElementById('err'),sub=document.querySelector('.pr');"
+"var s=document.getElementById('ssid'),h=document.getElementById('ssid_h'),p=document.getElementById('password'),b=document.getElementById('rescan'),e=document.getElementById('err'),sub=document.querySelector('.pr'),pw=document.getElementById('pwshow');"
 "function E(m){e.textContent=m;e.style.display='block'}"
-"function bars(r){return r>-50?'||||':r>-60?'||| ':r>-70?'||  ':r>-80?'|   ':'?'}"
 "function scan(){s.disabled=true;b.disabled=true;fetch('/scan',{cache:'no-store'}).then(function(r){return r.json()}).then(function(l){"
 "var seen={};(l||[]).forEach(function(n){if(!seen[n.ssid]||seen[n.ssid].rssi<n.rssi)seen[n.ssid]=n;});"
 "var sr=Object.keys(seen).map(function(k){return seen[k]}).sort(function(a,b){return b.rssi-a.rssi});"
 "s.innerHTML='';if(!sr.length){var o=document.createElement('option');o.value='';o.textContent='No 2.4 GHz networks found';s.appendChild(o);}else{"
-"sr.forEach(function(n){var o=document.createElement('option');o.value=n.ssid;o.textContent=n.ssid+' '+bars(n.rssi)+' '+n.rssi+' dBm';s.appendChild(o);});"
+"sr.forEach(function(n){var o=document.createElement('option');o.value=n.ssid;o.textContent=n.ssid+' '+n.bars;s.appendChild(o);});"
 "var o=document.createElement('option');o.value='_hid_';o.textContent='- Hidden (type above) -';s.appendChild(o);}"
 "s.disabled=false;b.disabled=false;}).catch(function(){s.disabled=false;b.disabled=false;E('Scan failed - reload to retry');});}"
 "s.addEventListener('change',function(){h.required=s.value==='_hid_';if(s.value==='_hid_')h.focus();});"
+"pw.addEventListener('click',function(){var s=p.type==='text';p.type=s?'password':'text';pw.textContent=s?'Show':'Hide';pw.setAttribute('aria-pressed',s?'false':'true');p.focus();});"
 "document.querySelector('form').addEventListener('submit',function(ev){"
 "var ssid=s.value==='_hid_'?h.value.trim():s.value;"
 "if(!ssid){ev.preventDefault();E('Choose a network or add a hidden one');return;}"
