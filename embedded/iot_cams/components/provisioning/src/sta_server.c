@@ -131,6 +131,7 @@ static esp_err_t whoami_get_handler(httpd_req_t *req)
         return ESP_OK;
     }
 
+    httpd_resp_set_hdr(req, "X-Witsaba-Device", "true");
     httpd_resp_send(req, buf, len);
     return ESP_OK;
 }
