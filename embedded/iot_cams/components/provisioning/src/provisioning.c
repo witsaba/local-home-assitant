@@ -322,11 +322,12 @@ bool provisioning_is_provisioned(void)
      *
      * The IDF wifi driver stores its config under namespace
      * "nvs.net80211" with SEPARATE keys per field:
-     *   - sta.ssid     (blob, up to 32 bytes)
-     *   - sta.pswd     (blob, up to 64 bytes)
-     *   - sta.bssid    etc.
+     *   - sta.ssid[0]  (blob, up to 32 bytes)
+     *   - sta.pswd[0]  (blob, up to 64 bytes)
+     *   - sta.bssid[0] etc.
      * It is NOT a single "config" blob. Verified against the
-     * wifi_nvs_config example in IDF v5.5.x. */
+     * wifi_nvs_config example in IDF v5.5.x. The [0] suffix is the
+     * multi-blob index key — espressif/esp-idf #14554. */
     nvs_handle_t nvs;
     esp_err_t err = nvs_open("nvs.net80211", NVS_READONLY, &nvs);
     if (err != ESP_OK) {
@@ -339,7 +340,7 @@ bool provisioning_is_provisioned(void)
 
     uint8_t ssid[32] = {0};
     size_t ssid_len = sizeof(ssid);
-    err = nvs_get_blob(nvs, "sta.ssid", ssid, &ssid_len);
+    err = nvs_get_blob(nvs, "sta.ssid[0]", ssid, &ssid_len);
     nvs_close(nvs);
 
     if (err != ESP_OK) {
@@ -556,12 +557,24 @@ esp_err_t provisioning_apply_captive_form(const char *ssid, const char *password
             sizeof(wifi_cfg.sta.password));
     wifi_cfg.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
 
+    /* NVS-SAVE BOUNDARY: IDF's wifi driver owns the actual nvs_set_blob
+     * under namespace "nvs.net80211" once we hand it a wifi_config_t.
+     * The keys it writes are sta.ssid[0], sta.pswd[0], sta.bssid[0], etc.
+     * (multi-blob indexed) — verified in espressif/esp-idf #14554.
+     * Log the inputs and the driver's return so the persist path is
+     * observable from monitor. Do NOT log the password in plaintext. */
+    ESP_LOGI(TAG, "apply_form: NVS-save start: ssid='%s' ssid_len=%u "
+                   "password_len=%u authmode=WPA2_PSK",
+             ssid, (unsigned)strlen(ssid), (unsigned)strlen(password));
+
     esp_err_t r = esp_wifi_set_config(WIFI_IF_STA, &wifi_cfg);
     if (r != ESP_OK) {
         ESP_LOGE(TAG, "apply_form: esp_wifi_set_config: %s",
                  esp_err_to_name(r));
         return r;
     }
+    ESP_LOGI(TAG, "apply_form: NVS-save OK: esp_wifi_set_config returned ESP_OK "
+                   "(driver has persisted credentials to nvs.net80211)");
 
     /* Kick off the station connect. In APSTA mode this only
      * affects the STA side; the softAP stays up so the
