@@ -104,6 +104,30 @@ just the captive portal: well under the 1 KB mark from the
 operator perspective — the log strings are the expensive part,
 not the C code.
 
+## Build verification
+
+`idf.py build` was run end-to-end (v5.5.3, ESP32 target, after
+`rm -rf build/ dependencies.lock && idf.py reconfigure`):
+
+```
+[100%] Built target iot_cams.elf
+iot_cams.bin binary size 0xd4600 bytes. Smallest app partition
+  is 0x100000 bytes. 0x2ba00 bytes (17%) free.
+Project build complete.
+```
+
+Bootloader 0x6630 bytes (~26 KB). App binary 0xd4600 bytes
+(~850 KB). 0x2ba00 bytes (~175 KB) free in the app partition.
+
+Caught one bug at build time and squashed the fix into the
+parent commit: the runtime `{deviceName}` substitution helper
+used `strnlen(name, 32)` against `CONFIG_PROVISIONING_DEVICE_NAME`
+whose Kconfig literal is `"iot-cam"` (8 bytes with NUL). GCC's
+`-Werror=stringop-overread` (an IDF v5.5.x default) flagged
+that the bound exceeded the source size. Fixed by switching to
+`strlen()` — the Kconfig string type already bounds the length
+at build time.
+
 ## Tracking
 
 Mirrored to Engram under project `local-home-assitant` topic
