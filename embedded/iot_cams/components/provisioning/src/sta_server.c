@@ -39,7 +39,6 @@
 #include "esp_system.h"
 #include "esp_netif.h"
 #include "esp_wifi.h"
-#include "cJSON.h"
 
 static const char *TAG = "sta_srv";
 
@@ -67,8 +66,9 @@ static esp_err_t mac_to_hex_lower(const uint8_t mac[6], char *out, size_t out_le
 }
 
 /* GET /whoami — JSON device identity.
- * Returns: mac, name, description, fw, chip
- * Follows the esp32-cam-surveillance /whoami contract. */
+ * Returns: mac, name, description (omitted if empty), fw, chip
+ * Follows the esp32-cam-surveillance /whoami contract.
+ * Optimized: static buffer, no heap, no per-request logging. */
 static esp_err_t whoami_get_handler(httpd_req_t *req)
 {
     if (!req) return ESP_FAIL;
@@ -104,40 +104,34 @@ static esp_err_t whoami_get_handler(httpd_req_t *req)
         default: chip_str = "ESP32-UNKNOWN"; break;
     }
 
-    /* Firmware version from IDF. */
-    const char *fw = esp_get_idf_version();
-
     /* Device name from Kconfig. */
     extern const char *prov_device_name(void);
     const char *name = prov_device_name();
+    const char *description = "";  /* no identity NVS yet */
 
-    ESP_LOGI(TAG, "whoami: mac %s fw %s chip %s", mac_hex, fw, chip_str);
+    /* Build JSON response using static buffer (no heap allocation).
+     * Format: {"mac":"...","name":"...","fw":"...","chip":"..."}
+     * description is omitted when empty (saves 14 bytes). */
+    char buf[160];
+    int len;
+    if (description[0] == '\0') {
+        /* Omit description when empty. */
+        len = snprintf(buf, sizeof(buf),
+            "{\"mac\":\"%s\",\"name\":\"%s\",\"fw\":\"%s\",\"chip\":\"%s\"}",
+            mac_hex, name, esp_get_idf_version(), chip_str);
+    } else {
+        len = snprintf(buf, sizeof(buf),
+            "{\"mac\":\"%s\",\"name\":\"%s\",\"description\":\"%s\",\"fw\":\"%s\",\"chip\":\"%s\"}",
+            mac_hex, name, description, esp_get_idf_version(), chip_str);
+    }
 
-    /* Build JSON response. */
-    cJSON *root = cJSON_CreateObject();
-    if (!root) {
+    if (len < 0 || (size_t)len >= sizeof(buf)) {
         httpd_resp_set_status(req, "500 Internal Server Error");
-        httpd_resp_sendstr(req, "{\"error\":\"oom\"}");
+        httpd_resp_sendstr(req, "{\"error\":\"buf_overflow\"}");
         return ESP_OK;
     }
 
-    cJSON_AddStringToObject(root, "mac",         mac_hex);
-    cJSON_AddStringToObject(root, "name",        name);
-    cJSON_AddStringToObject(root, "description", "");  /* no identity NVS yet */
-    cJSON_AddStringToObject(root, "fw",          fw);
-    cJSON_AddStringToObject(root, "chip",        chip_str);
-
-    char *out = cJSON_PrintUnformatted(root);
-    cJSON_Delete(root);
-
-    if (!out) {
-        httpd_resp_set_status(req, "500 Internal Server Error");
-        httpd_resp_sendstr(req, "{\"error\":\"oom\"}");
-        return ESP_OK;
-    }
-
-    httpd_resp_send(req, out, strlen(out));
-    free(out);
+    httpd_resp_send(req, buf, len);
     return ESP_OK;
 }
 
