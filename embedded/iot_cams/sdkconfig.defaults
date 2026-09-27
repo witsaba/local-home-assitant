@@ -1,0 +1,72 @@
+# sdkconfig.defaults — embedded/iot_cams firmware defaults.
+#
+# Read by `idf.py reconfigure` on every fresh build. Each
+# CONFIG_* here is the project floor; a developer can override
+# per-machine via `idf.py menuconfig` (writes to gitignored
+# `./sdkconfig`) or per CI run via `sdkconfig.ci`.
+#
+# Adding a value here without matching the same default in
+# `components/provisioning/Kconfig.projbuild` is a bug — Kconfig
+# will resolve the conflict in favor of the user's local config
+# and the build will start ignoring one or the other.
+
+# === Bootloader / flasher ===
+#
+# AI-Thinker ESP32-CAM comes populated with a 4 MB SPI flash
+# (the partition label 'W25Q32'). Without the explicit 4 MB
+# override, the bootloader rejects 4 KB of address space at
+# the top of the chip and the boot log warns
+# 'Detected size(4096k) larger than the size in the binary
+# image header(2048k)'. Crystal is 40 MHz on every board
+# revision we ship; DIO mode matches the AI-Thinker reference
+# schematic.
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_ESPTOOLPY_FLASHFREQ_40M=y
+CONFIG_ESPTOOLPY_FLASHMODE_DIO=y
+
+# The AI-Thinker ESP32-CAM board uses a Boya BY25Q32 flash
+# chip. Without this flag the build uses the generic flash
+# driver which works but misses per-chip optimisations.
+CONFIG_SPI_FLASH_SUPPORT_BOYA_CHIP=y
+
+# === WiFi provisioning ===
+#
+# Mirrors `components/provisioning/Kconfig.projbuild`. With
+# these set, a fresh checkout + flash puts the device into a
+# softAP at `IoT-Cam_3091B0` (WPA2 passphrase from
+# CONFIG_PROVISIONING_SOFTAP_PASS). The operator joins the
+# softAP, opens http://192.168.4.1/ in a browser, and submits
+# their home Wi-Fi credentials through an HTML form.
+#
+# Both `abcd1234` defaults are PLACEHOLDERS. Ship-time
+# packaging must replace them with per-fleet values.
+CONFIG_PROVISIONING_SOFTAP_PASS="abcd1234"
+CONFIG_PROVISIONING_SERVICE_NAME_PREFIX="IoT-Cam"
+CONFIG_PROVISIONING_DEVICE_NAME="iot-cam"
+
+# Kept for the api's `pop` field. The captive flow does not
+# prompt for a PoP (the WPA2 passphrase is the operator-visible
+# security boundary). Future revisions may drop this.
+CONFIG_PROVISIONING_POP="abcd1234"
+
+# === Protocomm security model ===
+#
+# The captive portal does NOT use the IDF wifi_provisioning
+# / protocomm manager, so these symbols are no longer
+# pinned by the provisioning component. They are kept as a
+# marker that the build resolves them only if a sibling
+# component imports the relevant code paths. Leave them
+# at the IDF default.
+# CONFIG_ESP_PROTOCOMM_SUPPORT_SECURITY_VERSION_1=y
+
+# === Default partition table ===
+#
+# The IDF v5.5 default partition table (single 1 MB 'factory'
+# app + 24 KB NVS + 4 KB PHY) is correct for this firmware
+# at -O3 — see `idf.py build` output
+# `iot_cams.bin binary size 0xdf220 bytes ... 0x20de0 bytes
+# (13%) free`. Leave the partition table at IDF defaults
+# until camera + ws components push past the 13% ceiling;
+# at that point switch to `partitions.csv` with a 1.5 MB
+# factory partition (matches `esp32-cam-surveillance`'s
+# firmware/sdkconfig.defaults convention).

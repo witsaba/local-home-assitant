@@ -1,0 +1,17 @@
+## embedded/iot_cams/main/idf_component.yml
+##
+## Manifest for the iot_cams application entry-point component.
+##
+## Declares ONE path dependency: the WiFi provisioning component
+## living at ../components/provisioning/. The component manager
+## pulls it into the build graph during `idf.py reconfigure`, just
+## like a managed component pulled from a registry. The same
+## `dependencies:` key (`provisioning: { path: <url> }`) works when
+## the component is later lifted to a separate git repository —
+## only the URL swaps in.
+
+version: 0.1.0
+description: iot_cams ESP-IDF application — wires the provisioning package into the firmware entry point.
+dependencies:
+  provisioning:
+    path: ../components/provisioning

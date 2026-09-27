@@ -1,0 +1,61 @@
+# components/provisioning/Kconfig.projbuild
+#
+# Project-level config menu for the iot_cams provisioning component.
+# Appears under "WiFi Provisioning" in `idf.py menuconfig`.
+#
+# Each visible symbol selects its underlying IDF dependency so a
+# consumer who enables our component also enables everything we
+# actually link against. This avoids the "functionally present,
+# actually disabled" failure mode at `idf.py reconfigure` time.
+
+menu "WiFi Provisioning"
+
+    # The provisioning security-version knob used to live here
+    # (with PROV_SECURITY_1 default) but was removed when the
+    # captive portal replaced the IDF wifi_provisioning manager
+    # on Sep 26. The WPA2 passphrase is now the operator-visible
+    # security boundary; the PoP arg of provisioning_init() is
+    # accepted for API stability but unused.
+
+    config PROVISIONING_POP
+        string "Default proof-of-possession"
+        default "abcd1234"
+        help
+            Used when the firmware does not pass a custom
+            provisioning_config_t::pop at provisioning_init() time.
+            Maximum 32 bytes. Surface the same PoP in the
+            provisioning phone app so the handshake completes.
+
+    config PROVISIONING_SOFTAP_PASS
+        string "SoftAP WPA2 passphrase"
+        default "abcd1234"
+        help
+            The SoftAP transport's `service_key` arg to
+            wifi_prov_mgr_start_provisioning() — translates to the
+            WPA2 passphrase on the device's softAP network
+            (the IoT-Cam_xxXXxx SSID). Min 8, max 64 bytes per
+            the IDF SoftAP scheme. The phone-app operator types
+            this when joining the softAP before the secure handshake.
+            Distinct from the PoP: PoP authenticates the security-1
+            session; this passphrase authenticates the Wi-Fi link.
+            Note: passphrase length is validated at runtime in the
+            captive portal's form handler; this Kconfig symbol
+            carries the build-time default only.
+
+    config PROVISIONING_SERVICE_NAME_PREFIX
+        string "SoftAP SSID prefix"
+        default "IoT-Cam"
+        help
+            The MAC suffix is appended at runtime when the firmware
+            does not pass a custom service_name. Must satisfy the
+            softAP SSID length budget (32 bytes total).
+
+    config PROVISIONING_DEVICE_NAME
+        string "Device name exposed on the iot-cam-info endpoint"
+        default "iot-cam"
+        help
+            Free-form identifier shown to the user during the
+            provisioning phone-app flow. Trivial cosmetic; the
+            control plane treats it as opaque.
+
+endmenu
