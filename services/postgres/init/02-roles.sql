@@ -10,22 +10,10 @@
 -- no CREATEROLE, and no SUPERUSER. Schema migrations are run as pg-admin
 -- (the POSTGRES_USER created by the image entrypoint).
 --
--- Idempotent: if a role already exists, we update its password instead
--- of failing. This makes re-running the bootstrap against a partially
--- initialized volume safe.
+-- Idempotent: CREATE ROLE IF NOT EXISTS creates the role only if it does
+-- not exist. For password rotation we rely on ALTER ROLE in 01-bootstrap.sh
+-- after the volume is already initialized, not on this init script.
 
-DO $$
-BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'pg-worker') THEN
-        CREATE ROLE "pg-worker" WITH LOGIN PASSWORD :'pg_worker_password';
-    ELSE
-        ALTER ROLE "pg-worker" WITH LOGIN PASSWORD :'pg_worker_password';
-    END IF;
+CREATE ROLE "pg-worker" WITH LOGIN PASSWORD :'pg_worker_password';
 
-    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'pg-messaging-core') THEN
-        CREATE ROLE "pg-messaging-core" WITH LOGIN PASSWORD :'pg_messaging_core_password';
-    ELSE
-        ALTER ROLE "pg-messaging-core" WITH LOGIN PASSWORD :'pg_messaging_core_password';
-    END IF;
-END
-$$;
+CREATE ROLE "pg-messaging-core" WITH LOGIN PASSWORD :'pg_messaging_core_password';
