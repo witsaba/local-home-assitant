@@ -53,9 +53,22 @@ the service run on a developer laptop with zero setup.
 | `NATS_PORT`     | `4222`        | 0–65535. `-1` = OS-assigned (tests). |
 | `LOG_LEVEL`     | `info`        | `debug`, `info`, `warn`, `error`.    |
 | `NATS_DATA_DIR` | *(empty)*     | Reserved for JetStream follow-up.    |
+| `PG_HOST`       | `127.0.0.1`   | Postgres host. Loaded today but no DB connection opened yet. |
+| `PG_PORT`       | `5432`        | Postgres port. Loaded but unused in v1. |
+| `PG_DATABASE`   | `witsaba`     | Database name. Loaded but unused in v1. |
+| `PG_USER`       | `pg-messaging-core` | Role for the future read consumer. |
+| `PG_PASSWORD`   | (none)        | Password for the role above. Loaded but unused in v1. |
 
 Invalid values (non-numeric port, unknown log level) cause the
 process to exit with code `2` before anything starts.
+
+### `PG_*` are loaded but unused today
+
+The compose file forwards `PG_HOST` / `PG_PORT` / `PG_DATABASE` /
+`PG_USER` / `PG_PASSWORD` to this service so operators can pin the
+credentials once and let any future read consumer pick them up.
+The v1 binary loads them into `Config` but does **not** open a
+connection — the first read consumer is a separate follow-up.
 
 ---
 
@@ -151,6 +164,10 @@ the same subject.
   first publisher is needed.
 * **Consumer**: subscription lifecycle + handler registration.
   Same location as the producer.
+* **DB read consumer**: an internal/consumer that reads from
+  `witsaba.devices` (as `pg-messaging-core`, `SELECT` only) and
+  forwards events over NATS. Auth credentials are already plumbed
+  via `PG_*`; only the consumer logic is missing.
 * **Health endpoint**: an HTTP `/healthz` independent from the
   NATS internal healthz, suitable for k8s probes.
 
