@@ -378,8 +378,11 @@ static esp_err_t provision_post_handler(httpd_req_t *req)
     }
     free(body);
 
+#if 0 /* CAPTIVE_VERBOSE_LOG: receipt trace for the operator submit.
+        Flip to 1 in sdkconfig.defaults when you need the trace. */
     ESP_LOGI(TAG, "POST /provision: ssid=%s password=(redacted, len=%d)",
              fd.ssid, (int)strlen(fd.password));
+#endif
 
     /* Apply via the provisioning component's inter-module helper,
      * which writes the credentials through esp_wifi_set_config()
@@ -454,8 +457,10 @@ static void wifi_scan_task(void *arg)
         .scan_type   = WIFI_SCAN_TYPE_ACTIVE,
     };
 
+#if 0 /* CAPTIVE_VERBOSE_LOG: scan start trace. Flip 1 for debug. */
     ESP_LOGI(TAG, "wifi_scan_task: starting active scan (max %d APs)",
              MAX_SCAN_AP);
+#endif
 
     esp_err_t r = esp_wifi_scan_start(&scan_cfg, true);
     if (r != ESP_OK) {
@@ -506,7 +511,9 @@ static void wifi_scan_task(void *arg)
         s_scan_cache.rssi[i] = rssi_buf[i];
     }
 
+#if 0 /* CAPTIVE_VERBOSE_LOG: scan result count. Flip 1 for debug. */
     ESP_LOGI(TAG, "wifi_scan_task: found %d usable networks", out_count);
+#endif
 
 done:
     xSemaphoreGive(done);
@@ -628,7 +635,9 @@ static esp_err_t default_captive_handler(httpd_req_t *req, httpd_err_code_t err)
 esp_err_t captive_portal_bring_up(void)
 {
     if (s_captive_httpd) {
+#if 0 /* CAPTIVE_VERBOSE_LOG: idempotent re-bring-up. Flip 1 for debug. */
         ESP_LOGW(TAG, "bring_up: already running");
+#endif
         return ESP_OK;
     }
 
@@ -647,8 +656,10 @@ esp_err_t captive_portal_bring_up(void)
         s_captive_httpd = NULL;
         return r;
     }
+#if 0 /* CAPTIVE_VERBOSE_LOG: bring-up confirmation. Flip 1 for debug. */
     ESP_LOGI(TAG, "captive httpd running on port %d",
              httpd_cfg.server_port);
+#endif
 
     /* Register the captive URIs. The manager will add its
      * protocomm URIs later, after we hand the handle to the
@@ -717,7 +728,9 @@ void captive_portal_tear_down(void)
 
     esp_err_t r = httpd_stop(s_captive_httpd);
     if (r != ESP_OK) {
+#if 0 /* CAPTIVE_VERBOSE_LOG: tear_down stop warning. Flip 1 for debug. */
         ESP_LOGW(TAG, "tear_down: httpd_stop: %s", esp_err_to_name(r));
+#endif
     }
     s_captive_httpd = NULL;
 }
