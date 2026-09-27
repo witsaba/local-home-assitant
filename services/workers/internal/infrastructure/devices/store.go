@@ -3,7 +3,6 @@ package devices
 import (
 	"context"
 	"errors"
-	"io"
 
 	"github.com/jackc/pgx/v5/pgconn"
 
@@ -19,6 +18,13 @@ type Querier interface {
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 }
 
+// PoolCloser matches the pgxpool.Pool.Close signature: no return value.
+// pgxpool.Pool.Close has no error return, so we model the optional
+// closer with this signature rather than io.Closer.
+type PoolCloser interface {
+	Close()
+}
+
 // Pgx is the Postgres-backed Repository. It owns no connection state
 // of its own; the pool (or any Querier) is supplied at construction.
 //
@@ -27,8 +33,8 @@ type Querier interface {
 // If the table is missing, the database will return an error and the
 // repository will surface it to the caller.
 type Pgx struct {
-	q     Querier
-	pool  io.Closer // optional; if non-nil, Close() will close it
+	q    Querier
+	pool PoolCloser // optional; if non-nil, Close() will close it
 }
 
 // NewPgx returns a Pgx repository backed by q.
@@ -36,7 +42,7 @@ type Pgx struct {
 // If pool is non-nil, the returned repository will close it on Close().
 // Pass nil for pool when q does not need explicit teardown (e.g. tests
 // using a fake Querier). Production code passes *pgxpool.Pool.
-func NewPgx(q Querier, pool io.Closer) *Pgx {
+func NewPgx(q Querier, pool PoolCloser) *Pgx {
 	return &Pgx{q: q, pool: pool}
 }
 
@@ -113,6 +119,6 @@ func (p *Pgx) Close() {
 	if p.pool == nil {
 		return
 	}
-	_ = p.pool.Close()
+	p.pool.Close()
 	p.pool = nil
 }

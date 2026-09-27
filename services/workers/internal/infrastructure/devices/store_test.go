@@ -185,12 +185,10 @@ func TestPgxUpsertSurfacesDriverError(t *testing.T) {
 
 type fakeCloser struct {
 	closed bool
-	err    error
 }
 
-func (f *fakeCloser) Close() error {
+func (f *fakeCloser) Close() {
 	f.closed = true
-	return f.err
 }
 
 func TestPgxCloseClosesPoolWhenProvided(t *testing.T) {

@@ -1,23 +1,28 @@
 // workers is the composition root for the periodic-background-job host.
-// It wires: config → logger → events channel → emit → scheduler (with
-// discovery) → consumer → signal.NotifyContext → graceful drain → exit 0.
+// It wires: config → logger → pgx pool → devices repo → events channel
+// → emit → scheduler (with discovery) → consumer → signal.NotifyContext
+// → graceful drain → repo close → exit 0.
 package main
 
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"os"
 	"os/signal"
 	"sync"
 	"syscall"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+	"go.uber.org/zap"
+
 	"github.com/witsaba/local-home-assitant/services/workers/internal/infrastructure/config"
+	"github.com/witsaba/local-home-assitant/services/workers/internal/infrastructure/devices"
 	loggerinfra "github.com/witsaba/local-home-assitant/services/workers/internal/infrastructure/logger"
 	"github.com/witsaba/local-home-assitant/services/workers/internal/jobs/discovery"
 	"github.com/witsaba/local-home-assitant/services/workers/internal/types"
 	"github.com/witsaba/local-home-assitant/services/workers/internal/worker"
-	"go.uber.org/zap"
 )
 
 // version is stamped at build time via -ldflags.
@@ -30,6 +35,12 @@ const shutdownTimeout = 10 * time.Second
 
 // eventsBufferSize is the capacity of the fan-in events channel.
 const eventsBufferSize = 256
+
+// pgPingTimeout caps how long startup waits for Postgres to accept a
+// connection. The compose file gates the workers container on the
+// postgres healthcheck, so in practice this returns immediately; the
+// timeout exists to fail fast if the operator misconfigures PG_*.
+const pgPingTimeout = 5 * time.Second
 
 func main() { os.Exit(run()) }
 
@@ -52,6 +63,50 @@ func run() int {
 		zap.Int("discovery_interval_s", cfg.DiscoveryIntervalSeconds),
 		zap.Int("discovery_pool_size", cfg.DiscoveryWorkerPoolSize),
 		zap.Int("discovery_probe_timeout_ms", cfg.DiscoveryProbeTimeoutMs),
+		zap.String("pg_host", cfg.PGHost),
+		zap.Int("pg_port", cfg.PGPort),
+		zap.String("pg_database", cfg.PGDatabase),
+		zap.String("pg_user", cfg.PGUser),
+	)
+
+	// Build the pgxpool against the host loopback. Postgres binds to
+	// 127.0.0.1 only (listen_addresses=127.0.0.1 in docker-compose.yml),
+	// so sslmode=disable is acceptable here: no TLS in the loopback
+	// hop, and the listener is not reachable from the LAN.
+	connStr := pgConnString(cfg)
+	pool, err := pgxpool.New(context.Background(), connStr)
+	if err != nil {
+		log.Error("postgres pool init failed",
+			zap.String("host", cfg.PGHost),
+			zap.Int("port", cfg.PGPort),
+			zap.String("database", cfg.PGDatabase),
+			zap.String("user", cfg.PGUser),
+			zap.Error(err),
+		)
+		return 2
+	}
+	// The devices repository owns the pool's lifecycle; we hand it
+	// both as Querier (for Exec) and as io.Closer (for shutdown).
+	// repo.Close() runs from the deferred call below.
+	repo := devices.NewPgx(pool, pool)
+	defer repo.Close()
+
+	pingCtx, pingCancel := context.WithTimeout(context.Background(), pgPingTimeout)
+	if err := pool.Ping(pingCtx); err != nil {
+		pingCancel()
+		log.Error("postgres ping failed",
+			zap.String("host", cfg.PGHost),
+			zap.Int("port", cfg.PGPort),
+			zap.Duration("timeout", pgPingTimeout),
+			zap.Error(err),
+		)
+		return 2
+	}
+	pingCancel()
+	log.Info("postgres connected",
+		zap.String("host", cfg.PGHost),
+		zap.Int("port", cfg.PGPort),
+		zap.String("database", cfg.PGDatabase),
 	)
 
 	// The fan-in events channel. Owned by main. The scheduler's emit
@@ -118,4 +173,22 @@ func run() int {
 
 	log.Info("workers stopped")
 	return 0
+}
+
+// pgConnString builds the postgres:// URL consumed by pgxpool.New.
+// Uses url.UserPassword so special characters in the password are
+// percent-encoded automatically. sslmode=disable is intentional: the
+// server is bound to 127.0.0.1 only and not reachable from the LAN,
+// so loopback plaintext is acceptable until a follow-up adds TLS.
+func pgConnString(cfg *config.Config) string {
+	u := url.URL{
+		Scheme: "postgres",
+		User:   url.UserPassword(cfg.PGUser, cfg.PGPassword),
+		Host:   fmt.Sprintf("%s:%d", cfg.PGHost, cfg.PGPort),
+		Path:   "/" + cfg.PGDatabase,
+	}
+	q := u.Query()
+	q.Set("sslmode", "disable")
+	u.RawQuery = q.Encode()
+	return u.String()
 }
