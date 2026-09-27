@@ -6,19 +6,78 @@
 # Mac dev. Validation deferred to a Linux host.
 #
 # Networking model:
-#   - network_mode: host on both services (so the worker sees the LAN).
+#   - network_mode: host on every service (so the worker sees the LAN,
+#     and Postgres reaches the LAN-reachable address space consistently).
 #   - Docker service-name DNS does NOT apply under network_mode: host.
 #   - `extra_hosts` injects "messaging-core -> 127.0.0.1" into each
 #     container's /etc/hosts so NATS_HOST=messaging-core resolves.
 #   - messaging-core binds to 127.0.0.1:4222 on the host (which is
 #     where the worker also reaches it via the host loopback).
+#   - Postgres binds to 127.0.0.1:5432 ONLY (listen_addresses=127.0.0.1
+#     via command-line GUC). It is reachable from the other host-mode
+#     containers via the host loopback, but NOT exposed to the LAN.
+#     Postgres does NOT use extra_hosts because the host we want is
+#     already literal 127.0.0.1.
+#
+# Postgres bootstrap:
+#   - services/postgres/init/* is mounted at /docker-entrypoint-initdb.d
+#     read-only. The official postgres entrypoint runs every *.sh there
+#     exactly once, in lexical order, on a freshly initialized data
+#     volume. See services/postgres/README.md for the run-it-again rules.
 #
 # Env overrides: drop a .env file next to this compose file. Every
 # variable below falls back to a sane default if .env is missing.
+# Passwords (POSTGRES_PASSWORD, PG_*_PASSWORD) have NO defaults; they
+# must be set in .env or the postgres container will refuse to start.
 
 name: witsaba-local-home
 
+volumes:
+  witsaba-postgres-data:
+    # Named volume for /var/lib/postgresql/data. Persists across
+    # `docker compose down`. Removed only by `docker compose down -v`.
+    # Empty data directory is the signal for the postgres entrypoint
+    # to run /docker-entrypoint-initdb.d/ on first boot.
+
 services:
+  postgres:
+    # The shared witsaba database. pgvector is preinstalled in this image
+    # (pgvector/pgvector:pg16-trixie) for future use; no vector
+    # columns are created by this bootstrap. See odd/tasks/postgres-storage.md.
+    image: pgvector/pgvector:pg16-trixie
+    container_name: witsaba-postgres
+    init: true                       # tini as PID 1 — clean signal handling
+    network_mode: host               # see file header; bind to loopback only
+    restart: unless-stopped
+    # listen_addresses=127.0.0.1 keeps Postgres on the host loopback
+    # only. Under network_mode: host the container shares the host's
+    # network stack, so binding to 0.0.0.0 would expose 5432 to the LAN.
+    command:
+      - "postgres"
+      - "-c"
+      - "listen_addresses=127.0.0.1"
+    volumes:
+      - witsaba-postgres-data:/var/lib/postgresql/data
+      - ./services/postgres/init:/docker-entrypoint-initdb.d:ro
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-witsaba}
+      POSTGRES_USER: ${POSTGRES_USER:-pg-admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
+      # Forwarded to 01-bootstrap.sh via the container env. Both MUST
+      # be set; the bootstrap script aborts otherwise.
+      PG_WORKER_PASSWORD: ${PG_WORKER_PASSWORD:?PG_WORKER_PASSWORD must be set in .env}
+      PG_MESSAGING_CORE_PASSWORD: ${PG_MESSAGING_CORE_PASSWORD:?PG_MESSAGING_CORE_PASSWORD must be set in .env}
+    healthcheck:
+      # pg_isready exits 0 when the server accepts connections. We
+      # point it at 127.0.0.1 because the server is bound to loopback.
+      test:
+        - "CMD-SHELL"
+        - "pg_isready -h 127.0.0.1 -p ${POSTGRES_PORT:-5432} -U ${POSTGRES_USER:-pg-admin} -d ${POSTGRES_DB:-witsaba}"
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
   messaging-core:
     build:
       context: ./services/messaging-core
@@ -44,6 +103,18 @@ services:
       NATS_HOST: ${NATS_HOST:-messaging-core}
       NATS_PORT: ${NATS_PORT:-4222}
       LOG_LEVEL: ${LOG_LEVEL:-info}
+      # PG_* are read by the future messaging-core DB consumer; today
+      # the binary loads them but does not open a connection. PG_PASSWORD
+      # defaults to PG_MESSAGING_CORE_PASSWORD so operators only set one
+      # value per role in .env; set PG_PASSWORD explicitly to override.
+      PG_HOST: ${PG_HOST:-127.0.0.1}
+      PG_PORT: ${PG_PORT:-${POSTGRES_PORT:-5432}}
+      PG_DATABASE: ${PG_DATABASE:-${POSTGRES_DB:-witsaba}}
+      PG_USER: ${PG_USER:-pg-messaging-core}
+      PG_PASSWORD: ${PG_PASSWORD:-${PG_MESSAGING_CORE_PASSWORD}}
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   workers:
     build:
@@ -58,8 +129,12 @@ services:
     network_mode: host
     restart: unless-stopped
     depends_on:
-      - messaging-core                # v1 worker does not talk to NATS yet;
-                                       # declared for intent / ordering
+      messaging-core:                # v1 worker does not talk to NATS yet;
+        condition: service_started   # declared for intent / ordering; if
+                                       # messaging-core later exposes a
+                                       # healthcheck, switch to service_healthy
+      postgres:
+        condition: service_healthy
     # Same /etc/hosts entry as messaging-core so any future NATS
     # client in this container can dial nats://messaging-core:4222.
     extra_hosts:
@@ -72,3 +147,12 @@ services:
       # Forwarded for future NATS clients; v1 worker does not consume it.
       NATS_HOST: ${NATS_HOST:-messaging-core}
       NATS_PORT: ${NATS_PORT:-4222}
+      # Postgres connection for the devices UPSERT path. Resolved against
+      # the host loopback (Postgres binds to 127.0.0.1:5432). PG_PASSWORD
+      # defaults to PG_WORKER_PASSWORD so operators only set one value per
+      # role in .env; set PG_PASSWORD explicitly to override.
+      PG_HOST: ${PG_HOST:-127.0.0.1}
+      PG_PORT: ${PG_PORT:-${POSTGRES_PORT:-5432}}
+      PG_DATABASE: ${PG_DATABASE:-${POSTGRES_DB:-witsaba}}
+      PG_USER: ${PG_USER:-pg-worker}
+      PG_PASSWORD: ${PG_PASSWORD:-${PG_WORKER_PASSWORD}}

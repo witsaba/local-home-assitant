@@ -62,9 +62,94 @@ the service run on a developer laptop with zero setup.
 | `DISCOVERY_PROBE_TIMEOUT_MS`  | `1500`      | Per-IP `GET /whoami` timeout. Must be > 0.             |
 | `DISCOVERY_WORKER_POOL_SIZE`  | `64`        | Max concurrent probe goroutines per scan. Must be > 0. |
 | `LOG_LEVEL`                   | `info`      | `debug`, `info`, `warn`, `error` (case-insensitive).   |
+| `PG_HOST`                     | `127.0.0.1` | Hostname of the Postgres container. Must be non-empty. |
+| `PG_PORT`                     | `5432`      | Postgres TCP port. Must be in `[1, 65535]`.            |
+| `PG_DATABASE`                 | `witsaba`   | Database name. Must be non-empty.                      |
+| `PG_USER`                     | `pg-worker` | Role used by the workers service. Must be non-empty.  |
+| `PG_PASSWORD`                 | (none)      | Password for the role above. Must be non-empty.       |
 
-Invalid values (interval ≤ 0, unknown log level, etc.) cause the
-process to exit with code `2` before the scheduler starts.
+Invalid values (interval ≤ 0, unknown log level, empty PG_*,
+PG_PORT out of range, etc.) cause the process to exit with code
+`2` before the scheduler starts.
+
+---
+
+## Postgres
+
+The workers service connects to the shared `witsaba` Postgres
+container defined at the repo root. Connection targets are read
+from `PG_*` env vars (see the table above); defaults match the
+top-level `docker-compose.yml` `PG_*` block, which itself defaults
+`PG_PASSWORD` to `PG_WORKER_PASSWORD` so operators only define one
+password per role.
+
+### Role
+
+This service authenticates as `pg-worker`. The role is created by
+`services/postgres/init/02-roles.sql` on the first init of the
+postgres data volume. Its GRANTs come from
+`services/postgres/init/03-schema.sql`:
+
+  - `INSERT`, `UPDATE`, `DELETE`, `SELECT` on every table owned by
+    `pg-admin` in `witsaba`.
+  - `USAGE` on the `witsaba` schema itself.
+  - No DDL, no `CREATEDB`, no `CREATEROLE`, no `SUPERUSER`.
+
+`pg-messaging-core` is the sibling role for `services/messaging-core`
+and gets `SELECT` only.
+
+### Startup behavior
+
+`main.go` opens a `pgxpool.Pool` early in startup and `Ping`s it
+with a 5s timeout:
+
+  - On success, the pool is handed to `devices.NewPgx(pool, pool)`
+    and the consumer drains events into it.
+  - On failure (DB unreachable, bad credentials, schema missing),
+    the process logs the connection error with the host/port/user
+    context and exits with code `2`.
+
+This means **workers refuses to run without Postgres**, which is the
+intended behavior: the discovery job's only purpose is to feed the
+devices table.
+
+### `witsaba.devices` shape
+
+```
+mac            TEXT        PRIMARY KEY
+name           TEXT
+fw             TEXT
+chip           TEXT
+last_source_ip INET
+first_seen_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+last_seen_at   TIMESTAMPTZ NOT NULL
+```
+
+Every UPSERT refreshes `name`, `fw`, `chip`, `last_source_ip`, and
+`last_seen_at`; `first_seen_at` is preserved across refreshes
+(insert-only). The repository emits a single SQL statement per
+event — no `BEGIN`/`COMMIT` overhead and no N+1 risk.
+
+### Verifying the connection from outside
+
+```bash
+# From the compose stack
+docker compose exec postgres \
+  pg_isready -h 127.0.0.1 -U pg-admin -d witsaba
+
+# Insert as pg-worker (should succeed)
+docker compose exec -e PGPASSWORD="$PG_WORKER_PASSWORD" postgres \
+  psql -U pg-worker -d witsaba \
+  -c "INSERT INTO witsaba.devices (mac, last_seen_at) VALUES ('aa:bb:cc:dd:ee:ff', now());"
+
+# Read as pg-worker (should succeed)
+docker compose exec -e PGPASSWORD="$PG_WORKER_PASSWORD" postgres \
+  psql -U pg-worker -d witsaba \
+  -c "SELECT mac, name, fw FROM witsaba.devices LIMIT 10;"
+```
+
+See `services/postgres/README.md` for the full operational
+contract (init semantics, asymmetry vs NATS, image choice).
 
 ---
 
@@ -78,14 +163,15 @@ cmd/workers/main.go                     ← composition root, signal handling, e
     │   ├── job.go                      ← Job interface (Name, Interval, Run)
     │   └── scheduler.go                ← ticker + panic recovery + ctx propagation
     └── infrastructure/
-        ├── config/                     ← env-var loader
+        ├── config/                     ← env-var loader (PG_* too)
+        ├── devices/                    ← devices.Repository (Noop + pgx.Upsert)
         ├── logger/                     ← zap + otelzap bridge
         ├── routetable/                 ← platform-specific subnet discovery (Linux / Darwin)
         └── probe/                      ← /whoami probe with X-Witsaba-Device filter
 
     internal/jobs/discovery/            ← the FIRST worker (plug-in job package)
     ├── discovery.go                    ← Job impl: enumerate subnets → CIDR expand → pool → emit
-    ├── consumer.go                     ← drains the events channel, logs each hit
+    ├── consumer.go                     ← drains the events channel, persists + logs each hit
     └── types.go                        ← type-alias back into internal/types
 ```
 
@@ -126,6 +212,23 @@ scanner is the **`X-Witsaba-Device: true` HTTP response header**
 that every witsaba firmware emits. Starlink's `/whoami`, or any
 other random device that happens to answer on port 80, will not
 have this header and is silently dropped at the probe layer.
+
+### Persistence
+
+Every matched event reaches the `Consumer`, which:
+
+1. Calls `repository.Upsert(ctx, event)` against the
+   `pg-worker` role in the `witsaba.devices` table.
+2. Logs the hit at INFO with `upsert_ok=true`, OR at WARN with
+   `upsert_ok=false` and the driver error attached.
+
+The consumer is **resilient**: an Upsert failure does not stop the
+loop. The channel is still drained, the scheduler still ticks, and
+the next event gets another chance. Repeated failures show up in
+the log stream and the operator can react.
+
+See the [Postgres section](#postgres) below for the role model,
+table shape, and how to verify the GRANTs from a shell.
 
 ---
 
@@ -185,8 +288,12 @@ A few of the interesting tests, in plain English:
 | `internal/infrastructure/routetable/routetable_darwin.go`       | `route -n get default` + `net.Interfaces()`.                         |
 | `internal/infrastructure/routetable/routetable_unsupported.go`  | `ErrUnsupportedPlatform` for other OSes.                             |
 | `internal/infrastructure/probe/whoami.go`                        | `GET /whoami` probe, `X-Witsaba-Device` filter.                      |
+| `internal/infrastructure/devices/devices.go`                     | `Repository` interface (`Upsert`, `Close`) used by the consumer.    |
+| `internal/infrastructure/devices/noop.go`                        | `Noop` reference implementation: logs and returns nil.              |
+| `internal/infrastructure/devices/store.go`                       | `Pgx` implementation: single-statement UPSERT into `witsaba.devices`.|
+| `internal/infrastructure/devices/integration_test.go`            | Integration tests gated by `-tags=integration` + `INTEGRATION=postgres`. |
 | `internal/jobs/discovery/discovery.go`                          | `Job` impl: subnets → CIDR → worker pool → emit.                     |
-| `internal/jobs/discovery/consumer.go`                           | Drains the events channel, logs each hit.                            |
+| `internal/jobs/discovery/consumer.go`                           | Drains the events channel, persists + logs each hit.                |
 | `Makefile`                                                      | Developer targets (`make help` for the list).                        |
 | `.golangci.yaml`                                                | Minimal `golangci-lint v2` config used by `make lint`.               |
 
@@ -198,10 +305,11 @@ A few of the interesting tests, in plain English:
   on every `GET /whoami` response. Until that lands on every
   deployed device, `discovery` will find zero witsaba devices
   (expected). Tracked in a separate firmware PR.
-* **Persistence** — discovered devices have nowhere to live in
-  v1. Options for follow-up: write to a JSON file, push to
-  `messaging-core` (NATS), or a small SQLite store. The
-  `DiscoveryEvent` JSON tags are already stable for serialisation.
+* **Versioned schema migrations** — the `witsaba.devices` table
+  is currently created inline by the integration test. A real
+  migration tool (golang-migrate or equivalent) is the next
+  follow-up so production boots land the same DDL the test
+  verifies.
 * **`/healthz` endpoint** — no HTTP surface today; a future
   liveness probe would go in `cmd/workers/health.go` alongside
   the existing `cmd/workers/main.go`.
@@ -278,14 +386,28 @@ DISCOVERY_INTERVAL_SECONDS=30
 DISCOVERY_PROBE_TIMEOUT_MS=2000
 DISCOVERY_WORKER_POOL_SIZE=128
 LOG_LEVEL=debug
+
+# Postgres (compose defaults PG_PASSWORD to PG_WORKER_PASSWORD,
+# so usually only the *_PASSWORD values need to be set)
+PG_WORKER_PASSWORD=change-me-worker
+POSTGRES_PASSWORD=change-me-admin
 ```
 
-`NATS_HOST` and `NATS_PORT` are also forwarded to this service for
-future NATS clients (the v1 worker does not consume them yet). The
-default `NATS_HOST=messaging-core` resolves via the `extra_hosts`
-entry the compose file injects into this container's `/etc/hosts`,
+The compose file also forwards the Postgres connection block to
+this service (`PG_HOST`, `PG_PORT`, `PG_DATABASE`, `PG_USER`,
+`PG_PASSWORD`). The default `PG_PASSWORD` falls back to
+`PG_WORKER_PASSWORD` so operators only set one value per role.
+
+`NATS_HOST` and `NATS_PORT` are also forwarded for future NATS
+clients (the v1 worker does not consume them yet). The default
+`NATS_HOST=messaging-core` resolves via the `extra_hosts` entry
+the compose file injects into this container's `/etc/hosts`,
 mapping `messaging-core` to `127.0.0.1` (the host loopback, where
 the embedded NATS server is bound under `network_mode: host`).
+
+The compose file declares `depends_on: postgres: { condition:
+service_healthy }` so this service only starts after Postgres has
+accepted a connection on `127.0.0.1:5432`.
 
 ### LAN discovery — Linux-only caveat
 
