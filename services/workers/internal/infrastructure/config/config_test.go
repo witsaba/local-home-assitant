@@ -7,7 +7,7 @@ import (
 )
 
 func TestLoad_Defaults(t *testing.T) {
-	// Clear all relevant env vars. Set PG_PASSWORD to a non-empty value
+	// Clear all relevant env vars. Set PG_WORKER_PASSWORD to a non-empty value
 	// so validation passes; the workers config requires a password and
 	// the operator-supplied compose env fills it in production.
 	resetEnv(t)
@@ -55,7 +55,7 @@ func TestLoad_EnvOverride(t *testing.T) {
 	t.Setenv("PG_PORT", "6432")
 	t.Setenv("PG_DATABASE", "witsaba_alt")
 	t.Setenv("PG_USER", "pg-other")
-	t.Setenv("PG_PASSWORD", "secret")
+	t.Setenv("PG_WORKER_PASSWORD", "secret")
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -170,11 +170,11 @@ func TestLoad_InvalidPGPortTooHigh(t *testing.T) {
 
 func TestLoad_InvalidPGPassword(t *testing.T) {
 	resetEnv(t)
-	t.Setenv("PG_PASSWORD", "")
+	t.Setenv("PG_WORKER_PASSWORD", "")
 
 	_, err := config.Load()
 	if err == nil {
-		t.Error("expected error for empty PG_PASSWORD, got nil")
+		t.Error("expected error for empty PG_WORKER_PASSWORD, got nil")
 	}
 }
 
@@ -201,7 +201,7 @@ func TestLoad_EnvVarEmpty_FallsBackToDefault(t *testing.T) {
 	t.Setenv("PG_HOST", "")
 	t.Setenv("PG_DATABASE", "")
 	t.Setenv("PG_USER", "")
-	// PG_PASSWORD stays at the test-pw value so validation passes.
+	// PG_WORKER_PASSWORD stays at the test-pw value so validation passes.
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -219,7 +219,7 @@ func TestLoad_EnvVarEmpty_FallsBackToDefault(t *testing.T) {
 }
 
 // resetEnv clears every env var consumed by config.Load and sets
-// PG_PASSWORD to a non-empty value so validation passes. Each call
+// PG_WORKER_PASSWORD to a non-empty value so validation passes. Each call
 // installs the right env state for a single Load invocation.
 func resetEnv(t *testing.T) {
 	t.Helper()
@@ -232,9 +232,9 @@ func resetEnv(t *testing.T) {
 		"PG_PORT",
 		"PG_DATABASE",
 		"PG_USER",
-		"PG_PASSWORD",
+		"PG_WORKER_PASSWORD",
 	} {
 		t.Setenv(k, "")
 	}
-	t.Setenv("PG_PASSWORD", "test-pw")
+	t.Setenv("PG_WORKER_PASSWORD", "test-pw")
 }

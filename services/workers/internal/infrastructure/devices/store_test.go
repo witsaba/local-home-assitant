@@ -16,10 +16,9 @@ import (
 // fakeQuerier is a minimal Querier for unit tests. It records every
 // Exec call and returns the configured error, if any.
 type fakeQuerier struct {
-	mu     sync.Mutex
-	calls  []fakeCall
-	err    error // returned to every Exec call
-	closed bool
+	mu    sync.Mutex
+	calls []fakeCall
+	err   error // returned to every Exec call
 }
 
 type fakeCall struct {
@@ -50,7 +49,7 @@ func (f *fakeQuerier) Calls() []fakeCall {
 
 func TestPgxUpsertSendsExpectedSQL(t *testing.T) {
 	q := &fakeQuerier{}
-	repo := NewPgx(q, nil)
+	repo := NewPgx(q)
 
 	fixed := time.Date(2026, 9, 27, 12, 0, 0, 0, time.UTC)
 	// Pin nowFn so the test is deterministic.
@@ -108,7 +107,7 @@ func TestPgxUpsertSendsExpectedSQL(t *testing.T) {
 
 func TestPgxUpsertRejectsEmptyMAC(t *testing.T) {
 	q := &fakeQuerier{}
-	repo := NewPgx(q, nil)
+	repo := NewPgx(q)
 
 	err := repo.Upsert(context.Background(), types.DiscoveryEvent{SourceIP: "10.0.0.1"})
 	if err == nil {
@@ -121,7 +120,7 @@ func TestPgxUpsertRejectsEmptyMAC(t *testing.T) {
 
 func TestPgxUpsertEmptySourceIPBecomesNil(t *testing.T) {
 	q := &fakeQuerier{}
-	repo := NewPgx(q, nil)
+	repo := NewPgx(q)
 
 	ev := types.DiscoveryEvent{
 		DiscoveredAt: time.Now(),
@@ -151,7 +150,7 @@ func TestPgxUpsertEmptySourceIPBecomesNil(t *testing.T) {
 
 func TestPgxUpsertZeroDiscoveredAtUsesNow(t *testing.T) {
 	q := &fakeQuerier{}
-	repo := NewPgx(q, nil)
+	repo := NewPgx(q)
 
 	fixed := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	origNow := nowFn
@@ -175,7 +174,7 @@ func TestPgxUpsertZeroDiscoveredAtUsesNow(t *testing.T) {
 func TestPgxUpsertSurfacesDriverError(t *testing.T) {
 	boom := errors.New("connection refused")
 	q := &fakeQuerier{err: boom}
-	repo := NewPgx(q, nil)
+	repo := NewPgx(q)
 
 	err := repo.Upsert(context.Background(), types.DiscoveryEvent{MAC: "aa:bb:cc:dd:ee:ff"})
 	if !errors.Is(err, boom) {
@@ -183,29 +182,56 @@ func TestPgxUpsertSurfacesDriverError(t *testing.T) {
 	}
 }
 
-type fakeCloser struct {
-	closed bool
-}
-
-func (f *fakeCloser) Close() {
-	f.closed = true
-}
-
-func TestPgxCloseClosesPoolWhenProvided(t *testing.T) {
+func TestPgxCloseIsSafe(t *testing.T) {
 	q := &fakeQuerier{}
-	pool := &fakeCloser{}
-	repo := NewPgx(q, pool)
-
+	repo := NewPgx(q)
+	// Close must not panic and must not error.
 	repo.Close()
-	if !pool.closed {
-		t.Fatal("expected pool.Close to be called")
+	// Close must be idempotent.
+	repo.Close()
+}
+
+func TestPgxUpsertAllFields(t *testing.T) {
+	q := &fakeQuerier{}
+	repo := NewPgx(q)
+
+	ev := types.DiscoveryEvent{
+		DiscoveredAt: time.Date(2026, 10, 1, 10, 30, 0, 0, time.UTC),
+		SourceIP:     "192.168.1.100",
+		MAC:          "ff:ee:dd:cc:bb:aa",
+		Name:         "living-room",
+		FW:           "2.0.0",
+		Chip:         "esp32-c3",
 	}
-	// Second call must not panic and must not call Close again.
-	repo.Close()
-}
 
-func TestPgxCloseIsSafeWithoutPool(t *testing.T) {
-	q := &fakeQuerier{}
-	repo := NewPgx(q, nil)
-	repo.Close() // must not panic
+	if err := repo.Upsert(context.Background(), ev); err != nil {
+		t.Fatalf("Upsert returned unexpected error: %v", err)
+	}
+
+	calls := q.Calls()
+	if len(calls) != 1 {
+		t.Fatalf("expected 1 call, got %d", len(calls))
+	}
+
+	args := calls[0].args
+	if len(args) != 6 {
+		t.Fatalf("expected 6 args, got %d", len(args))
+	}
+
+	// Verify all fields are passed correctly.
+	if args[0] != "ff:ee:dd:cc:bb:aa" {
+		t.Errorf("MAC: got %v, want %v", args[0], "ff:ee:dd:cc:bb:aa")
+	}
+	if args[1] != "living-room" {
+		t.Errorf("Name: got %v, want %v", args[1], "living-room")
+	}
+	if args[2] != "2.0.0" {
+		t.Errorf("FW: got %v, want %v", args[2], "2.0.0")
+	}
+	if args[3] != "esp32-c3" {
+		t.Errorf("Chip: got %v, want %v", args[3], "esp32-c3")
+	}
+	if args[4] != "192.168.1.100" {
+		t.Errorf("SourceIP: got %v, want %v", args[4], "192.168.1.100")
+	}
 }

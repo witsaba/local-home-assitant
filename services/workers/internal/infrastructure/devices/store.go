@@ -3,8 +3,12 @@ package devices
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/witsaba/local-home-assitant/services/workers/internal/types"
 )
@@ -18,32 +22,25 @@ type Querier interface {
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 }
 
-// PoolCloser matches the pgxpool.Pool.Close signature: no return value.
-// pgxpool.Pool.Close has no error return, so we model the optional
-// closer with this signature rather than io.Closer.
-type PoolCloser interface {
-	Close()
-}
-
 // Pgx is the Postgres-backed Repository. It owns no connection state
-// of its own; the pool (or any Querier) is supplied at construction.
+// of its own; the singleton pool (or any Querier) is supplied at
+// construction.
 //
 // The schema and GRANTs are created out-of-band by the init scripts in
 // services/postgres/init/, so this code does not run CREATE statements.
 // If the table is missing, the database will return an error and the
 // repository will surface it to the caller.
 type Pgx struct {
-	q    Querier
-	pool PoolCloser // optional; if non-nil, Close() will close it
+	q Querier
 }
 
 // NewPgx returns a Pgx repository backed by q.
 //
-// If pool is non-nil, the returned repository will close it on Close().
-// Pass nil for pool when q does not need explicit teardown (e.g. tests
-// using a fake Querier). Production code passes *pgxpool.Pool.
-func NewPgx(q Querier, pool PoolCloser) *Pgx {
-	return &Pgx{q: q, pool: pool}
+// The pool lifecycle is managed by the db package singleton.
+// Use this constructor in production code with db.Get().
+// Tests may pass a fake Querier for isolated unit testing.
+func NewPgx(q Querier) *Pgx {
+	return &Pgx{q: q}
 }
 
 // upsertSQL is the single statement the repository executes. The
@@ -113,12 +110,58 @@ func (p *Pgx) Upsert(ctx context.Context, ev types.DiscoveryEvent) error {
 	return nil
 }
 
-// Close closes the underlying pool if one was supplied at construction.
-// Safe to call when no pool was supplied or after a previous Close.
+// Close is a no-op. The pool lifecycle is managed by the db package.
+// This method exists to satisfy the Repository interface.
 func (p *Pgx) Close() {
-	if p.pool == nil {
-		return
+	// No-op: pool singleton is closed via db.Close().
+}
+
+// Queryer extends Querier with the Query method needed for schema validation.
+type Queryer interface {
+	Querier
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+}
+
+// CheckSchema queries information_schema and returns an error if the
+// witsaba.devices table is missing or malformed.
+func CheckSchema(ctx context.Context, pool *pgxpool.Pool) error {
+	rows, err := pool.Query(ctx, `
+		SELECT column_name, data_type, is_nullable
+		FROM information_schema.columns
+		WHERE table_schema = 'witsaba' AND table_name = 'devices'
+		ORDER BY ordinal_position
+	`)
+	if err != nil {
+		return fmt.Errorf("query information_schema: %w", err)
 	}
-	p.pool.Close()
-	p.pool = nil
+	defer rows.Close()
+
+	var cols []string
+	for rows.Next() {
+		var colName, dataType, nullable string
+		if err := rows.Scan(&colName, &dataType, &nullable); err != nil {
+			return fmt.Errorf("scan column: %w", err)
+		}
+		cols = append(cols, colName)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("rows iteration: %w", err)
+	}
+
+	// Verify required columns exist.
+	required := []string{"mac", "name", "fw", "chip", "last_source_ip", "first_seen_at", "last_seen_at"}
+	for _, req := range required {
+		found := false
+		for _, col := range cols {
+			if strings.EqualFold(col, req) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("missing required column: %s", req)
+		}
+	}
+
+	return nil
 }

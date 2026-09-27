@@ -7,53 +7,80 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
+
+	"github.com/witsaba/local-home-assitant/services/workers/internal/infrastructure/db"
 )
 
 // Config holds every env-var-driven setting for the workers host.
 type Config struct {
-	// DiscoveryIntervalSeconds is how often the discovery job fires.
-	// Must be > 0.
+	// Discovery settings.
 	DiscoveryIntervalSeconds int
-	// DiscoveryProbeTimeoutMs is the per-IP probe timeout in milliseconds.
-	// Must be > 0.
-	DiscoveryProbeTimeoutMs int
-	// DiscoveryWorkerPoolSize is the max goroutines probing IPs in parallel.
-	// Must be > 0.
-	DiscoveryWorkerPoolSize int
-	// LogLevel is one of debug|info|warn|error.
+	DiscoveryProbeTimeoutMs  int
+	DiscoveryWorkerPoolSize  int
+
+	// Logging.
 	LogLevel string
-	// PGHost is the Postgres hostname. Default 127.0.0.1 (host loopback
-	// under network_mode: host). Must be non-empty.
-	PGHost string
-	// PGPort is the Postgres TCP port. Must be in [1, 65535].
-	PGPort int
-	// PGDatabase is the database name. Must be non-empty.
+
+	// Postgres connection.
+	PGHost     string
+	PGPort     int
 	PGDatabase string
-	// PGUser is the role name. Must be non-empty.
-	PGUser string
-	// PGPassword is the role password. Must be non-empty.
+	PGUser     string
 	PGPassword string
+
+	// Postgres pool tuning (optional - safe defaults applied if zero).
+	PGMaxConns        int
+	PGMinConns        int
+	PGMaxConnLifetime time.Duration
+	PGMaxConnIdleTime time.Duration
 }
 
 // Load reads the documented env vars and returns a validated Config.
 // Returns an error describing which value is invalid if validation fails.
 func Load() (*Config, error) {
 	cfg := &Config{
+		// Discovery defaults.
 		DiscoveryIntervalSeconds: envInt("DISCOVERY_INTERVAL_SECONDS", 60),
 		DiscoveryProbeTimeoutMs:  envInt("DISCOVERY_PROBE_TIMEOUT_MS", 1500),
 		DiscoveryWorkerPoolSize:  envInt("DISCOVERY_WORKER_POOL_SIZE", 64),
 		LogLevel:                 envStr("LOG_LEVEL", "info"),
-		PGHost:                   envStr("PG_HOST", "127.0.0.1"),
-		PGPort:                   envInt("PG_PORT", 5432),
-		PGDatabase:               envStr("PG_DATABASE", "witsaba"),
-		PGUser:                   envStr("PG_USER", "pg-worker"),
-		PGPassword:               envStr("PG_PASSWORD", ""),
+
+		// Postgres connection defaults.
+		PGHost:     envStr("PG_HOST", "127.0.0.1"),
+		PGPort:     envInt("PG_PORT", 5432),
+		PGDatabase: envStr("PG_DATABASE", "witsaba"),
+		PGUser:     envStr("PG_USER", "pg-worker"),
+		PGPassword: envStr("PG_WORKER_PASSWORD", ""),
+
+		// Postgres pool tuning (zero = use db package defaults).
+		PGMaxConns:        envInt("PG_MAX_CONNS", 0),
+		PGMinConns:        envInt("PG_MIN_CONNS", 0),
+		PGMaxConnLifetime: envDuration("PG_MAX_CONN_LIFETIME", 0),
+		PGMaxConnIdleTime: envDuration("PG_MAX_CONN_IDLE_TIME", 0),
 	}
 
 	if err := validate(cfg); err != nil {
 		return nil, err
 	}
 	return cfg, nil
+}
+
+// ToPoolConfig converts Config to db.PoolConfig for pool initialization.
+func (c *Config) ToPoolConfig() *db.PoolConfig {
+	return &db.PoolConfig{
+		Host:     c.PGHost,
+		Port:     c.PGPort,
+		Database: c.PGDatabase,
+		User:     c.PGUser,
+		Password: c.PGPassword,
+
+		// Pool tuning - zero values trigger safe defaults in db package.
+		MaxConns:        c.PGMaxConns,
+		MinConns:        c.PGMinConns,
+		MaxConnLifetime: c.PGMaxConnLifetime,
+		MaxConnIdleTime: c.PGMaxConnIdleTime,
+	}
 }
 
 func validate(cfg *Config) error {
@@ -85,7 +112,7 @@ func validate(cfg *Config) error {
 		return fmt.Errorf("PG_USER must be non-empty")
 	}
 	if cfg.PGPassword == "" {
-		return fmt.Errorf("PG_PASSWORD must be non-empty")
+		return fmt.Errorf("PG_WORKER_PASSWORD must be non-empty")
 	}
 	return nil
 }
@@ -102,6 +129,15 @@ func envInt(key string, fallback int) int {
 func envStr(key string, fallback string) string {
 	if v, ok := os.LookupEnv(key); ok && v != "" {
 		return v
+	}
+	return fallback
+}
+
+func envDuration(key string, fallback time.Duration) time.Duration {
+	if v, ok := os.LookupEnv(key); ok && v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			return d
+		}
 	}
 	return fallback
 }
