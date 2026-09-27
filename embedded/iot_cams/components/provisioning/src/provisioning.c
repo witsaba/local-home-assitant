@@ -36,6 +36,7 @@
 #include "esp_netif.h"
 #include "esp_mac.h"
 #include "nvs_flash.h"
+#include "esp_system.h"
 #include "mdns.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -688,9 +689,6 @@ esp_err_t provisioning_apply_captive_form(const char *ssid, const char *password
      * assigned address. */
     esp_err_t cr = esp_wifi_connect();
     if (cr != ESP_OK && cr != ESP_ERR_WIFI_CONN) {
-        /* ESP_ERR_WIFI_CONN means the STA is already busy;
-         * the connect call still queued. Treat as success since
-         * the config IS in NVS and the wifi driver will retry. */
         ESP_LOGE(TAG, "apply_form: esp_wifi_connect: %s",
                  esp_err_to_name(cr));
         return cr;
@@ -700,8 +698,17 @@ esp_err_t provisioning_apply_captive_form(const char *ssid, const char *password
     ESP_LOGI(TAG, "apply_form: ssid=%s password=(redacted) — persisted",
              ssid);
 
-    if (s_done_sema) {
-        xSemaphoreGive(s_done_sema);
-    }
+    /* Match esp32-cam-surveillance softap_handlers.c pattern:
+     * restart immediately so the wifi driver reads the persisted
+     * credentials from NVS in a clean boot. The alternative
+     * (stay running, switch to STA-only) was causing credentials
+     * to not survive the power cycle — the wifi driver's NVS
+     * write from esp_wifi_set_config() was not surviving the
+     * next boot reliably when the device continued running. */
+    ESP_LOGI(TAG, "apply_form: restarting in 100ms...");
+    vTaskDelay(pdMS_TO_TICKS(100));
+    esp_restart();
+
+    /* Unreachable — esp_restart() does not return on device. */
     return ESP_OK;
 }
