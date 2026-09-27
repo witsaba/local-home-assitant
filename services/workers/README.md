@@ -66,7 +66,7 @@ the service run on a developer laptop with zero setup.
 | `PG_PORT`                     | `5432`      | Postgres TCP port. Must be in `[1, 65535]`.            |
 | `PG_DATABASE`                 | `witsaba`   | Database name. Must be non-empty.                      |
 | `PG_USER`                     | `pg-worker` | Role used by the workers service. Must be non-empty.  |
-| `PG_PASSWORD`                 | (none)      | Password for the role above. Must be non-empty.       |
+| `PG_WORKER_PASSWORD`         | (none)      | Password for the pg-worker role. Must be non-empty.   |
 
 Invalid values (interval ≤ 0, unknown log level, empty PG_*,
 PG_PORT out of range, etc.) cause the process to exit with code
@@ -79,9 +79,8 @@ PG_PORT out of range, etc.) cause the process to exit with code
 The workers service connects to the shared `witsaba` Postgres
 container defined at the repo root. Connection targets are read
 from `PG_*` env vars (see the table above); defaults match the
-top-level `docker-compose.yml` `PG_*` block, which itself defaults
-`PG_PASSWORD` to `PG_WORKER_PASSWORD` so operators only define one
-password per role.
+top-level `docker-compose.yml` `PG_*` block, which itself uses
+`PG_WORKER_PASSWORD` so operators only define one password per role.
 
 ### Role
 

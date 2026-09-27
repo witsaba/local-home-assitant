@@ -1,5 +1,5 @@
 // workers is the composition root for the periodic-background-job host.
-// It wires: config → logger → pgx pool → devices repo → events channel
+// It wires: config → logger → singleton db pool → devices repo → events channel
 // → emit → scheduler (with discovery) → consumer → signal.NotifyContext
 // → graceful drain → repo close → exit 0.
 package main
@@ -7,17 +7,16 @@ package main
 import (
 	"context"
 	"fmt"
-	"net/url"
 	"os"
 	"os/signal"
 	"sync"
 	"syscall"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
 
 	"github.com/witsaba/local-home-assitant/services/workers/internal/infrastructure/config"
+	"github.com/witsaba/local-home-assitant/services/workers/internal/infrastructure/db"
 	"github.com/witsaba/local-home-assitant/services/workers/internal/infrastructure/devices"
 	loggerinfra "github.com/witsaba/local-home-assitant/services/workers/internal/infrastructure/logger"
 	"github.com/witsaba/local-home-assitant/services/workers/internal/jobs/discovery"
@@ -63,51 +62,42 @@ func run() int {
 		zap.Int("discovery_interval_s", cfg.DiscoveryIntervalSeconds),
 		zap.Int("discovery_pool_size", cfg.DiscoveryWorkerPoolSize),
 		zap.Int("discovery_probe_timeout_ms", cfg.DiscoveryProbeTimeoutMs),
-		zap.String("pg_host", cfg.PGHost),
-		zap.Int("pg_port", cfg.PGPort),
-		zap.String("pg_database", cfg.PGDatabase),
-		zap.String("pg_user", cfg.PGUser),
+		zap.Stringer("db_url", cfg.ToPoolConfig()),
 	)
 
-	// Build the pgxpool against the host loopback. Postgres binds to
-	// 127.0.0.1 only (listen_addresses=127.0.0.1 in docker-compose.yml),
-	// so sslmode=disable is acceptable here: no TLS in the loopback
-	// hop, and the listener is not reachable from the LAN.
-	connStr := pgConnString(cfg)
-	pool, err := pgxpool.New(context.Background(), connStr)
-	if err != nil {
-		log.Error("postgres pool init failed",
-			zap.String("host", cfg.PGHost),
-			zap.Int("port", cfg.PGPort),
-			zap.String("database", cfg.PGDatabase),
-			zap.String("user", cfg.PGUser),
+	// Initialize the singleton pool once at startup.
+	// sync.Once guarantees thread-safe one-time initialization.
+	if err := db.Open(cfg.ToPoolConfig()); err != nil {
+		log.Error("db pool open failed",
 			zap.Error(err),
+			zap.Stringer("db_url", cfg.ToPoolConfig()),
 		)
 		return 2
 	}
-	// The devices repository owns the pool's lifecycle; we hand it
-	// both as Querier (for Exec) and as io.Closer (for shutdown).
-	// repo.Close() runs from the deferred call below.
-	repo := devices.NewPgx(pool, pool)
-	defer repo.Close()
+	// Ensure pool is closed on shutdown.
+	defer db.Close()
 
+	// Verify connectivity.
 	pingCtx, pingCancel := context.WithTimeout(context.Background(), pgPingTimeout)
-	if err := pool.Ping(pingCtx); err != nil {
+	if err := db.Ping(pingCtx); err != nil {
 		pingCancel()
-		log.Error("postgres ping failed",
-			zap.String("host", cfg.PGHost),
-			zap.Int("port", cfg.PGPort),
+		log.Error("db ping failed",
 			zap.Duration("timeout", pgPingTimeout),
 			zap.Error(err),
 		)
 		return 2
 	}
 	pingCancel()
-	log.Info("postgres connected",
-		zap.String("host", cfg.PGHost),
-		zap.Int("port", cfg.PGPort),
-		zap.String("database", cfg.PGDatabase),
+	log.Info("db pool connected",
+		zap.Stringer("db_url", cfg.ToPoolConfig()),
 	)
+
+	// Get the singleton pool instance for the repository.
+	pool := db.Get()
+
+	// Build the devices repository using the singleton pool.
+	// The repository shares the pool's lifecycle (Close is called via db.Close).
+	repo := devices.NewPgx(pool)
 
 	// The fan-in events channel. Owned by main. The scheduler's emit
 	// closure writes into it; the consumer drains it.
@@ -171,24 +161,7 @@ func run() int {
 		)
 	}
 
+	// db.Close() is called via defer above.
 	log.Info("workers stopped")
 	return 0
-}
-
-// pgConnString builds the postgres:// URL consumed by pgxpool.New.
-// Uses url.UserPassword so special characters in the password are
-// percent-encoded automatically. sslmode=disable is intentional: the
-// server is bound to 127.0.0.1 only and not reachable from the LAN,
-// so loopback plaintext is acceptable until a follow-up adds TLS.
-func pgConnString(cfg *config.Config) string {
-	u := url.URL{
-		Scheme: "postgres",
-		User:   url.UserPassword(cfg.PGUser, cfg.PGPassword),
-		Host:   fmt.Sprintf("%s:%d", cfg.PGHost, cfg.PGPort),
-		Path:   "/" + cfg.PGDatabase,
-	}
-	q := u.Query()
-	q.Set("sslmode", "disable")
-	u.RawQuery = q.Encode()
-	return u.String()
 }

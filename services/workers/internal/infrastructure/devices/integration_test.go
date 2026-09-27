@@ -5,7 +5,10 @@ package devices_test
 
 import (
 	"context"
+	"fmt"
 	"os"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -108,7 +111,7 @@ func TestIntegration_UpsertInsertsNewRow(t *testing.T) {
 	}
 
 	pool := newPool(t)
-	repo := devices.NewPgx(pool, nil) // nil pool closer; t.Cleanup closes it
+	repo := devices.NewPgx(pool)
 
 	ev := types.DiscoveryEvent{
 		DiscoveredAt: time.Date(2026, 9, 27, 12, 0, 0, 0, time.UTC),
@@ -164,7 +167,7 @@ func TestIntegration_UpsertRefreshesOnConflict(t *testing.T) {
 	}
 
 	pool := newPool(t)
-	repo := devices.NewPgx(pool, nil)
+	repo := devices.NewPgx(pool)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -226,7 +229,7 @@ func TestIntegration_UpsertAcceptsEmptyOptionalFields(t *testing.T) {
 	}
 
 	pool := newPool(t)
-	repo := devices.NewPgx(pool, nil)
+	repo := devices.NewPgx(pool)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -265,7 +268,7 @@ func TestIntegration_UpsertRejectsEmptyMAC(t *testing.T) {
 	}
 
 	pool := newPool(t)
-	repo := devices.NewPgx(pool, nil)
+	repo := devices.NewPgx(pool)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -275,3 +278,132 @@ func TestIntegration_UpsertRejectsEmptyMAC(t *testing.T) {
 		t.Fatal("expected error for empty MAC, got nil")
 	}
 }
+
+func TestIntegration_ConcurrentUpserts(t *testing.T) {
+	if !integrationEnabled() {
+		t.Skipf("set %s=postgres to enable integration tests", integrationGate)
+	}
+
+	pool := newPool(t)
+	repo := devices.NewPgx(pool)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// Create 50 different devices concurrently.
+	const numDevices = 50
+	var wg sync.WaitGroup
+	var successCount int64
+	var lastErr error
+	var errMu sync.Mutex
+
+	for i := 0; i < numDevices; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+
+			ev := types.DiscoveryEvent{
+				DiscoveredAt: time.Now(),
+				SourceIP:     "192.168.1.51",
+				MAC:          fmt.Sprintf("aa:bb:cc:dd:ee:%02x", idx),
+				Name:         fmt.Sprintf("cam-%d", idx),
+				FW:           "1.0.0",
+				Chip:         "esp32",
+			}
+
+			if err := repo.Upsert(ctx, ev); err != nil {
+				errMu.Lock()
+				lastErr = err
+				errMu.Unlock()
+				return
+			}
+			atomic.AddInt64(&successCount, 1)
+		}(i)
+	}
+
+	wg.Wait()
+
+	if lastErr != nil {
+		t.Fatalf("concurrent upsert failed: %v", lastErr)
+	}
+	if successCount != numDevices {
+		t.Errorf("expected %d successful upserts, got %d", numDevices, successCount)
+	}
+
+	// Verify all 50 rows exist in the database.
+	var count int
+	err := pool.QueryRow(ctx, "SELECT COUNT(*) FROM witsaba.devices").Scan(&count)
+	if err != nil {
+		t.Fatalf("count query failed: %v", err)
+	}
+	if count != numDevices {
+		t.Errorf("expected %d rows in database, got %d", numDevices, count)
+	}
+}
+
+func TestIntegration_ConcurrentUpsertsSameDevice(t *testing.T) {
+	if !integrationEnabled() {
+		t.Skipf("set %s=postgres to enable integration tests", integrationGate)
+	}
+
+	pool := newPool(t)
+	repo := devices.NewPgx(pool)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// All goroutines update the same device.
+	const numGoroutines = 20
+	const deviceMAC = "aa:bb:cc:dd:ee:ff"
+
+	var wg sync.WaitGroup
+	var successCount int64
+	var errCount int64
+	var lastErr error
+	var mu sync.Mutex
+
+	for i := 0; i < numGoroutines; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+
+			ev := types.DiscoveryEvent{
+				DiscoveredAt: time.Now(),
+				SourceIP:     fmt.Sprintf("192.168.1.%d", 50+idx),
+				MAC:          deviceMAC,
+				Name:         fmt.Sprintf("device-%d", idx),
+				FW:           fmt.Sprintf("1.%d.0", idx%10),
+				Chip:         "esp32-s3",
+			}
+
+			if err := repo.Upsert(ctx, ev); err != nil {
+				atomic.AddInt64(&errCount, 1)
+				mu.Lock()
+				lastErr = err
+				mu.Unlock()
+				return
+			}
+			atomic.AddInt64(&successCount, 1)
+		}(i)
+	}
+
+	wg.Wait()
+
+	if errCount > 0 {
+		t.Fatalf("some concurrent upserts failed: last error: %v", lastErr)
+	}
+	if successCount != numGoroutines {
+		t.Errorf("expected %d successful upserts, got %d", numGoroutines, successCount)
+	}
+
+	// Verify exactly 1 row exists (upsert semantics).
+	var count int
+	err := pool.QueryRow(ctx, "SELECT COUNT(*) FROM witsaba.devices WHERE mac = $1", deviceMAC).Scan(&count)
+	if err != nil {
+		t.Fatalf("count query failed: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("expected exactly 1 row for device %s, got %d", deviceMAC, count)
+	}
+}
+
