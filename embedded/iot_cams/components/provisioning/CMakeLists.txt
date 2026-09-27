@@ -12,8 +12,8 @@
 #     + event loop, needed by the softAP bring-up
 #   - nvs_flash  — credential persistence (esp_wifi_set_config)
 #   - mdns       — captive portal's service advertising
-#   - esp_http_server — captive portal's GET /, /whoami, /provision
-#     handlers
+#   - esp_http_server — captive portal's GET /, /provision, /scan
+#     and sta_server's GET /whoami handlers
 #   - json       — JSON /whoami response payload
 #
 # protocomm and wifi_provisioning are NO LONGER linked because
@@ -23,6 +23,7 @@
 idf_component_register(
     SRCS "src/provisioning.c"
          "src/captive_portal.c"
+         "src/sta_server.c"
          "src/wifi_cred.c"
     INCLUDE_DIRS "include"
     REQUIRES esp_wifi esp_netif esp_event nvs_flash mdns esp_http_server json

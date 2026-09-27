@@ -11,11 +11,16 @@
  * SCOPE — what this header exposes to `provisioning.c`:
  *
  *   captive_portal_bring_up()
- *     Brings up an httpd server, registers the four captive
- *     URIs (GET /, POST /provision, GET /whoami, default
+ *     Brings up an httpd server, registers the three captive
+ *     URIs (GET /, POST /provision, GET /scan, default
  *     handler), and hands the httpd handle to the softAP
  *     scheme so the manager's protocomm URIs are layered on
  *     the same port. Idempotent.
+ *
+ *   NOTE: /whoami is NOT registered here. The device identity
+ *     endpoint is served by sta_server.c on the STA interface
+ *     after provisioning completes, not during the softAP
+ *     provisioning phase.
  *
  *   captive_portal_tear_down()
  *     Stops the httpd and clears the registered handlers.
