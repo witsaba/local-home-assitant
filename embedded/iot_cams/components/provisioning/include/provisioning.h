@@ -173,6 +173,17 @@ bool provisioning_sta_has_ip(void);
  * from a previous session bleeding into the new one. */
 void provisioning_reset_sta_state(void);
 
+/* Start the STA-bound HTTP server that exposes /whoami for device
+ * discovery. Call this after the device has joined the home AP
+ * and received an IP (after provisioning_join_ap() succeeds and
+ * IP_EVENT_STA_GOT_IP fires). The server runs on port 80 for the
+ * lifetime of the device.
+ *
+ * Idempotent: safe to call more than once.
+ *
+ * Returns ESP_OK on success, or the underlying httpd_start error. */
+esp_err_t provisioning_start_sta_server(void);
+
 #ifdef __cplusplus
 }
 #endif

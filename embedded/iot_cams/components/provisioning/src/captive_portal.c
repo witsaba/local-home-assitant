@@ -7,18 +7,20 @@
  *     softAP netif (which gets the canonical 192.168.4.1
  *     DHCP server IP via esp_netif_create_default_wifi_ap +
  *     esp_wifi_set_mode(WIFI_MODE_APSTA)).
- *   - Registers four URIs on that server:
+ *   - Registers three URIs on that server:
  *       GET  /            — HTML form (mobile-first)
  *       POST /provision   — accepts a form-urlencoded or JSON
  *                           body, applies credentials via
  *                           wifi_prov_mgr_configure_sta().
- *       GET  /whoami      — JSON device identity (replaces
- *                           the protocomm iot-cam-info endpoint
- *                           for the captive mode).
+ *       GET  /scan        — WiFi scan for network selection.
  *       * any GET         — captures the request and returns
  *                           the form (a poor-person's captive
  *                           portal so naive OS probes get a
  *                           recognisable body).
+ *
+ *   NOTE: /whoami is NOT registered here. The device identity
+ *     endpoint is served by sta_server.c on the STA interface
+ *     after provisioning completes.
  *   - Hands the httpd handle to the wifi_prov_scheme_softap
  *     so the manager's protocomm URIs are layered on the same
  *     server. The two co-exist; if an operator has the
@@ -88,10 +90,9 @@ static SemaphoreHandle_t s_scan_done_sema;
 /* Forward declaration of the scan task entry point. */
 static void wifi_scan_task(void *arg);
 
-/* Forward decls for the five handlers. */
+/* Forward decls for the four handlers. */
 static esp_err_t root_get_handler(httpd_req_t *req);
 static esp_err_t provision_post_handler(httpd_req_t *req);
-static esp_err_t whoami_get_handler(httpd_req_t *req);
 static esp_err_t scan_get_handler(httpd_req_t *req);
 static esp_err_t default_captive_handler(httpd_req_t *req, httpd_err_code_t err);
 
@@ -418,44 +419,6 @@ static esp_err_t provision_post_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
-/* GET /whoami — JSON device identity. */
-static esp_err_t whoami_get_handler(httpd_req_t *req)
-{
-    httpd_resp_set_type(req, "application/json");
-    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
-
-    cJSON *root = cJSON_CreateObject();
-    const char *name = CONFIG_PROVISIONING_DEVICE_NAME;
-    cJSON_AddStringToObject(root, "name", name);
-    const char *fw = "0.1.0";
-    cJSON_AddStringToObject(root, "fw_version", fw);
-
-    /* ssid / service_name the device is advertising. Helpful
-     * for an operator who discovers the device via mDNS in a
-     * mixed environment and wants to confirm the right one. */
-    extern const char *internal_prov_ssid(void);
-    /* The function lives in provisioning.c — small inter-module
-     * helper that returns the runtime SSID derived from the
-     * Kconfig prefix + last 3 bytes of MAC. Declared here as a
-     * forward decl since we don't want to expose it through
-     * provisioning.h's surface. */
-    cJSON_AddStringToObject(root, "softap_ssid", internal_prov_ssid());
-    cJSON_AddStringToObject(root, "softap_security",
-                            "WIFI_AUTH_WPA2_PSK");
-
-    char *out = cJSON_PrintUnformatted(root);
-    if (!out) {
-        cJSON_Delete(root);
-        httpd_resp_set_status(req, "500 Internal Server Error");
-        httpd_resp_sendstr(req, "{\"error\":\"oom\"}");
-        return ESP_OK;
-    }
-    httpd_resp_sendstr(req, out);
-    free(out);
-    cJSON_Delete(root);
-    return ESP_OK;
-}
-
 /* The WiFi scan task. Runs on a proper FreeRTOS task (not
  * the HTTPD worker thread), so esp_wifi_scan_start() has the
  * correct pthread context and does not crash with LoadProhibited.
@@ -719,12 +682,6 @@ esp_err_t captive_portal_bring_up(void)
         .handler = provision_post_handler,
     };
     httpd_register_uri_handler(s_captive_httpd, &post_uri);
-
-    httpd_uri_t whoami_uri = {
-        .uri = "/whoami", .method = HTTP_GET,
-        .handler = whoami_get_handler,
-    };
-    httpd_register_uri_handler(s_captive_httpd, &whoami_uri);
 
     httpd_uri_t scan_uri = {
         .uri = "/scan", .method = HTTP_GET,

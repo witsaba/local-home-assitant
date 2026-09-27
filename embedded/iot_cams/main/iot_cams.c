@@ -154,6 +154,13 @@ void app_main(void)
             return;
         }
         wait_for_sta_ip_and_log("already-provisioned");
+
+        /* Start the STA server for device discovery /whoami endpoint. */
+        r = provisioning_start_sta_server();
+        if (r != ESP_OK) {
+            ESP_LOGE(TAG, "failed to start STA server: %s", esp_err_to_name(r));
+        }
+
         ESP_LOGI(TAG, "entering supervisor loop");
         while (1) {
             vTaskDelay(pdMS_TO_TICKS(60000));
@@ -213,6 +220,12 @@ void app_main(void)
     if (r != ESP_OK) {
         ESP_LOGE(TAG, "post-provisioning: esp_wifi_set_mode(STA): %s",
                  esp_err_to_name(r));
+    }
+
+    /* Start the STA server for device discovery /whoami endpoint. */
+    r = provisioning_start_sta_server();
+    if (r != ESP_OK) {
+        ESP_LOGE(TAG, "failed to start STA server: %s", esp_err_to_name(r));
     }
 
     ESP_LOGI(TAG, "post-provisioning: entering supervisor loop");

@@ -43,6 +43,7 @@
 #include "freertos/semphr.h"
 
 #include "captive_portal.h"
+#include "sta_server.h"
 #include "wifi_cred.h"
 
 static const char *TAG = "prov";
@@ -115,6 +116,12 @@ const char *internal_prov_ssid(void)
     static char buf[PROV_NAME_MAX_LEN + 1];
     derive_service_name(buf, sizeof(buf));
     return buf;
+}
+
+/* Internal accessor for the device name (exported for sta_server.c). */
+const char *prov_device_name(void)
+{
+    return CONFIG_PROVISIONING_DEVICE_NAME;
 }
 
 /* On the bring-up path we currently use esp_netif + esp_wifi
@@ -625,6 +632,11 @@ esp_err_t provisioning_join_ap(void)
 
     ESP_LOGI(TAG, "join_ap: station connecting (credentials from NVS)");
     return ESP_OK;
+}
+
+esp_err_t provisioning_start_sta_server(void)
+{
+    return sta_server_start();
 }
 
 /* Expose the IP-acquired state to app_main.
