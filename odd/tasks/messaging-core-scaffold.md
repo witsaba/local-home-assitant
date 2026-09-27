@@ -184,6 +184,7 @@ func TestEmbeddedServer_StartsAndReceivesMessage(t *testing.T) {
 | T7   | `5375956` test(messaging-core): embedded NATS server receives published message |
 | T8   | `7b4add1` docs(messaging-core): service README |
 | T9   | this commit |
+| T10  | `3f5a1b7` feat(messaging-core): developer Makefile + golangci-lint config |
 
 ## Final acceptance run
 
