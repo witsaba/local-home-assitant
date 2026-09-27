@@ -41,7 +41,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PSQL=(psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$PG_ADMIN_DB")
 
 echo "[bootstrap] applying 02-roles.sql"
-"${PSQL[@]}" -f "$SCRIPT_DIR/02-roles.sql" \
+"${PSQL[@]}" -f "/docker-entrypoint-scripts/02-roles.sql" \
     -v "pg_worker_password=${PG_WORKER_PASSWORD}" \
     -v "pg_messaging_core_password=${PG_MESSAGING_CORE_PASSWORD}"
 
