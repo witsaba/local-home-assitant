@@ -15,10 +15,14 @@ provision**.
 ## Quick start
 
 ```bash
-# Build (output goes to ./bin/messaging-core)
-go build -o bin/messaging-core ./cmd/messaging-core
+# Show every developer target this repo exposes
+make help
 
-# Run with defaults: bind 127.0.0.1:4222, log level info
+# Build + run with defaults: bind 127.0.0.1:4222, log level info
+make run
+
+# Or invoke directly
+go build -o bin/messaging-core ./cmd/messaging-core
 ./bin/messaging-core
 
 # Override via env vars
@@ -91,9 +95,12 @@ Dependency direction is strict:
 
 ```bash
 # All 17 tests across config, logger, and natsserver packages
+make test
+
+# Or invoke go test directly
 go test ./...
 
-# Just the publish/receive round-trip
+# Publish/receive round-trip only
 go test ./internal/infrastructure/natsserver/... -v -run ReceivesPublished
 ```
 
@@ -124,6 +131,8 @@ the same subject.
 | `internal/infrastructure/natsserver/server.go`                        | Implements `ports.Server` over `nats-server/v2`.                                   |
 | `internal/infrastructure/natsserver/server_test.go`                   | Lifecycle tests (start/ready/shutdown).                                             |
 | `internal/infrastructure/natsserver/publish_test.go`                  | Publish/receive end-to-end + fan-out tests.                                         |
+| `Makefile`                                                            | Developer targets: `make help` for the list.                                        |
+| `.golangci.yaml`                                                      | Minimal golangci-lint config used by `make lint`.                                   |
 
 ---
 

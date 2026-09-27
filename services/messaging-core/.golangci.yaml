@@ -1,0 +1,29 @@
+# Minimal golangci-lint config for messaging-core.
+#
+# `make lint` is a no-op unless golangci-lint is installed; see the
+# Makefile for the install hint.
+
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  disable-all: true
+  enable:
+    - errcheck       # unchecked errors
+    - govet          # suspicious constructs
+    - ineffassign    # unused assignments
+    - staticcheck    # bug finder
+    - unused         # unused identifiers
+
+  settings:
+    govet:
+      enable-all: true
+
+issues:
+  max-issues-per-linter: 50
+  max-same-issues-per-linter: 5
+  exclude-rules:
+    - path: _test\.go
+      linters:
+        - errcheck

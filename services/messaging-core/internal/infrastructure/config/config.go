@@ -13,10 +13,10 @@ import (
 
 // Defaults applied when the corresponding env var is unset or empty.
 const (
-	defaultHost      = "127.0.0.1"
-	defaultPort      = 4222
-	defaultLogLevel  = "info"
-	defaultDataDir   = ""
+	defaultHost     = "127.0.0.1"
+	defaultPort     = 4222
+	defaultLogLevel = "info"
+	defaultDataDir  = ""
 )
 
 // Config is the resolved, validated runtime configuration.
