@@ -158,6 +158,44 @@ func TestDiscovery_NoTargets(t *testing.T) {
 	}
 }
 
+// TestDiscovery_ExpandCIDR_NormalizesHighInterfaceIP is the regression
+// test for the bug caught on the operator's Mac. When the interface IP
+// sits high in the subnet (e.g. 192.168.1.244/24), expandCIDR used to
+// start from the interface IP and miss every host below it. Old code
+// produced only 10 targets (.245-.254); the new code masks the IP
+// against the mask and produces 254 targets (.1-.254).
+func TestDiscovery_ExpandCIDR_NormalizesHighInterfaceIP(t *testing.T) {
+	t.Parallel()
+	network := net.IPNet{
+		IP:   net.IPv4(192, 168, 1, 244),
+		Mask: net.CIDRMask(24, 32),
+	}
+	fakeProvider := &fakeSubnetProvider{
+		subnets: []routetable.Subnet{{CIDR: network, Gateway: net.IPv4(192, 168, 1, 1)}},
+	}
+
+	var probes atomic.Int32
+	job := discovery.NewJob(10*time.Hour, 64, 5*time.Second, zap.NewNop())
+	job.SetSubnetProvider(fakeProvider)
+	job.SetProbe(func(ip net.IP, _ time.Duration) (types.DiscoveryEvent, bool, error) {
+		probes.Add(1)
+		return types.DiscoveryEvent{}, false, nil
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var emitted []types.DiscoveryEvent
+	_ = job.Run(ctx, func(ev types.DiscoveryEvent) { emitted = append(emitted, ev) })
+
+	if got := probes.Load(); got != 254 {
+		t.Errorf("expected 254 probes (all usable /24 hosts: .1-.254), got %d", got)
+	}
+	if len(emitted) != 0 {
+		t.Errorf("expected 0 events (all probes are misses), got %d", len(emitted))
+	}
+}
+
 // --- helpers ---
 
 type fakeSubnetProvider struct {

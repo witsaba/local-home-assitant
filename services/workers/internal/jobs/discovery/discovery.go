@@ -79,6 +79,14 @@ func (j *Job) Run(ctx context.Context, emit func(types.DiscoveryEvent)) error {
 		return nil
 	}
 
+	if len(subnets) > 0 {
+		cidrs := make([]string, 0, len(subnets))
+		for _, sn := range subnets {
+			cidrs = append(cidrs, sn.CIDR.String())
+		}
+		j.logger.Debug("discovered subnets", zap.Strings("cidrs", cidrs))
+	}
+
 	var targets []net.IP
 	for _, sn := range subnets {
 		targets = append(targets, expandCIDR(&sn.CIDR)...)
@@ -152,6 +160,13 @@ dispatch:
 // expandCIDR returns every usable host IP in the given IPv4 subnet.
 // Skips the network and broadcast addresses. For subnets smaller than
 // /30 the expansion is empty (no usable host addresses).
+//
+// Important: cidr.IP may be a host address (e.g. 192.168.1.244) rather
+// than the network address (192.168.1.0). We MUST mask it to get the
+// network address, otherwise the loop would start from the interface IP
+// and silently miss every host below it. Found by the operator's
+// Mac having en1 at 192.168.1.244/24 — loop was scanning .245-.254
+// (10 hosts) instead of .1-.254 (253 hosts).
 func expandCIDR(cidr *net.IPNet) []net.IP {
 	if cidr.IP.To4() == nil {
 		return nil
@@ -161,7 +176,10 @@ func expandCIDR(cidr *net.IPNet) []net.IP {
 		return nil
 	}
 
-	network := cidr.IP.To4()
+	// Normalize: AND the IP with the mask to get the network address.
+	// Without this, a host IP like 192.168.1.244 with a /24 mask would
+	// produce an expansion of just .245-.254 (10 hosts).
+	network := cidr.IP.To4().Mask(cidr.Mask)
 	broadcast := make(net.IP, 4)
 	for i := range network {
 		broadcast[i] = network[i] | ^cidr.Mask[i]
