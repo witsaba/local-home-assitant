@@ -528,6 +528,32 @@ done:
  * thread causes LoadProhibited in pthread_getspecific() (core dump
  * from real device, confirmed). The task stack is static (4 KB,
  * no heap allocation). */
+
+/* WiFi signal-strength meter — four UTF-8 block characters where
+ * U+2588 (█) is "filled" and U+2591 (░) is "empty". The thresholds
+ * (-50 / -67 / -75 / -85 dBm) are the conventional values used by
+ * most OS-level signal meters and map roughly to "excellent / good
+ * / usable / weak / no signal". Returned literals are 12 bytes
+ * each (4 chars × 3 bytes UTF-8) and live in .rodata.
+ *
+ * Operators do not read dBm at provisioning time; the meter is
+ * enough context for "is this my AP, and is it close enough to
+ * the softAP to talk back?" */
+static const char *get_wifi_bars_meter(int8_t rssi)
+{
+    if (rssi >= -50) {
+        return "\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88"; /* ████ */
+    } else if (rssi >= -67) {
+        return "\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x96\x91"; /* ███░ */
+    } else if (rssi >= -75) {
+        return "\xE2\x96\x88\xE2\x96\x88\xE2\x96\x91\xE2\x96\x91"; /* ██░░ */
+    } else if (rssi >= -85) {
+        return "\xE2\x96\x88\xE2\x96\x91\xE2\x96\x91\xE2\x96\x91"; /* █░░░ */
+    } else {
+        return "\xE2\x96\x91\xE2\x96\x91\xE2\x96\x91\xE2\x96\x91"; /* ░░░░ */
+    }
+}
+
 static esp_err_t scan_get_handler(httpd_req_t *req)
 {
     httpd_resp_set_type(req, "application/json");
@@ -586,9 +612,15 @@ static esp_err_t scan_get_handler(httpd_req_t *req)
     size_t off = 1;
     for (int i = 0; i < s_scan_cache.count && off < sizeof(resp) - 4; i++) {
         if (i > 0) resp[off++] = ',';
+        /* Bars are emitted as-is from .rodata (UTF-8). rssi is
+         * kept in the payload even though the operator UI no
+         * longer renders it; callers that want to do their own
+         * meter (e.g. a future home-assistant pairing screen)
+         * still get the raw value. */
         int n = snprintf(resp + off, sizeof(resp) - off,
-                         "{\"ssid\":\"%s\",\"rssi\":%d}",
-                         s_scan_cache.ssid[i], s_scan_cache.rssi[i]);
+                         "{\"ssid\":\"%s\",\"rssi\":%d,\"bars\":\"%s\"}",
+                         s_scan_cache.ssid[i], s_scan_cache.rssi[i],
+                         get_wifi_bars_meter(s_scan_cache.rssi[i]));
         if (n < 0 || (size_t)n >= sizeof(resp) - off) break;
         off += n;
     }
