@@ -81,7 +81,6 @@ type embeddedServer struct {
 	mu      sync.Mutex
 	started bool
 	url     string
-	err     error
 }
 
 func (s *embeddedServer) Start(ctx context.Context) error {
@@ -113,10 +112,7 @@ func (s *embeddedServer) Start(ctx context.Context) error {
 	pollCtx, cancel := context.WithTimeout(ctx, bootDeadline)
 	defer cancel()
 
-	for {
-		if s.srv.ReadyForConnections(50 * time.Millisecond) {
-			break
-		}
+	for !s.srv.ReadyForConnections(50 * time.Millisecond) {
 		select {
 		case <-pollCtx.Done():
 			return fmt.Errorf("natsserver: server did not become ready: %w", pollCtx.Err())
