@@ -1,0 +1,29 @@
+# Build artifacts
+bin/
+*.exe
+*.test
+*.out
+
+# Coverage
+coverage.out
+coverage.html
+
+# Go workspace
+go.work
+go.work.sum
+
+# Version control / Docker meta
+.git/
+.gitignore
+.gitattributes
+.dockerignore
+Dockerfile
+
+# Editor / IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# CI
+.github/

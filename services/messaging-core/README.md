@@ -156,6 +156,86 @@ the same subject.
 
 ---
 
+## Docker
+
+Linux only — see caveat at the bottom of this section.
+
+### Build & run via compose (from repo root)
+
+```bash
+docker compose up -d --build      # build + start both services
+docker compose logs -f            # tail both
+docker compose down               # stop and remove
+```
+
+With `network_mode: host` the container binds `127.0.0.1:4222` on
+the host. See "Remote clients" below for cross-host access.
+
+### Build the image standalone
+
+```bash
+# Default version stamp (0.1.0-dev-unknown)
+docker build -t witsaba/messaging-core:local \
+  -f services/messaging-core/Dockerfile \
+  services/messaging-core
+
+# Stamped from the current commit
+docker build \
+  --build-arg VERSION=0.1.0 \
+  --build-arg GIT_HEAD=$(git rev-parse --short HEAD) \
+  -t witsaba/messaging-core:dev \
+  -f services/messaging-core/Dockerfile \
+  services/messaging-core
+```
+
+### Image details
+
+- Build stage: `golang:1.26.3-alpine3.23` (~66 MB compressed).
+- Runtime stage: `alpine:3.23` + `ca-certificates`.
+- Static binary (`CGO_ENABLED=0`), cross-compiled to `linux`.
+- Runs as `nobody` (uid 65534).
+
+### Remote clients (future)
+
+To accept clients from other hosts, set `NATS_HOST=0.0.0.0` in `.env`
+(Compose substitutes it). Then add NATS auth (token / creds / TLS) —
+auth and TLS are tracked follow-ups in this README, not part of this
+branch.
+
+### NATS hostname: docker service name
+
+`NATS_HOST` defaults to `messaging-core` — the docker service name.
+Because the compose file uses `network_mode: host` (so the worker can
+reach the LAN), Docker's service-name DNS does not apply. The compose
+file injects `extra_hosts: ["messaging-core:127.0.0.1"]` on every
+service, so `messaging-core` resolves to the host loopback via each
+container's `/etc/hosts`. The embedded NATS server therefore binds to
+`127.0.0.1:4222` on the host, and any client (e.g. a future worker
+using NATS) can connect with `nats://messaging-core:4222`.
+
+Verified locally on Mac dev host: `docker compose up -d`, then from
+the workers container, `nc -zv messaging-core 4222` reports open.
+
+### Linux-only caveat
+
+`network_mode: host` on Docker Desktop (Mac/Windows) puts the
+container on the VM's network namespace, **not** your LAN. The
+worker in the same stack will not see devices like `192.168.1.51`
+from Mac dev. Validate on a real Linux target. Mac dev support via
+`ipvlan` / `macvlan` is tracked separately and not in this branch.
+
+Cross-platform builds: building on arm64 produces an arm64 image; on
+amd64 an amd64 image. For an explicit target arch, use buildx:
+
+```bash
+docker buildx build --platform linux/amd64 \
+  -t witsaba/messaging-core:dev \
+  -f services/messaging-core/Dockerfile \
+  --load services/messaging-core
+```
+
+---
+
 ## Versioning
 
 `var version` in `cmd/messaging-core/main.go` is the build

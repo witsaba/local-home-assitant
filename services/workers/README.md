@@ -224,6 +224,101 @@ A few of the interesting tests, in plain English:
 
 ---
 
+## Docker
+
+Linux only — see "LAN discovery" at the bottom of this section.
+
+### Build & run via compose (from repo root)
+
+```bash
+docker compose up -d --build      # build + start both services
+docker compose logs -f workers    # tail the worker
+docker compose down               # stop and remove
+```
+
+The compose file pins `network_mode: host` so the worker sees the
+host's interfaces and routing table. The discovery job enumerates
+subnets from `/proc/net/route` (Linux) inside the container — with
+host networking that is the **host's** route table, so the scan
+covers the real LAN (e.g. `192.168.1.0/24`).
+
+### Build the image standalone
+
+```bash
+# Default version stamp (0.1.0-dev-unknown)
+docker build -t witsaba/workers:local \
+  -f services/workers/Dockerfile \
+  services/workers
+
+# Stamped from the current commit
+docker build \
+  --build-arg VERSION=0.1.0 \
+  --build-arg GIT_HEAD=$(git rev-parse --short HEAD) \
+  -t witsaba/workers:dev \
+  -f services/workers/Dockerfile \
+  services/workers
+```
+
+### Image details
+
+- Build stage: `golang:1.26.3-alpine3.23` (~66 MB compressed).
+- Runtime stage: `alpine:3.23` + `ca-certificates`.
+- Static binary (`CGO_ENABLED=0`), cross-compiled to `linux`.
+- Runs as `nobody` (uid 65534).
+- No listening port in v1 (discovery is outbound only).
+
+### Env configuration in container
+
+All env vars from the table at the top of this README are wired
+through the project-level `docker-compose.yml`. Override any of
+them in `.env`:
+
+```env
+DISCOVERY_INTERVAL_SECONDS=30
+DISCOVERY_PROBE_TIMEOUT_MS=2000
+DISCOVERY_WORKER_POOL_SIZE=128
+LOG_LEVEL=debug
+```
+
+`NATS_HOST` and `NATS_PORT` are also forwarded to this service for
+future NATS clients (the v1 worker does not consume them yet). The
+default `NATS_HOST=messaging-core` resolves via the `extra_hosts`
+entry the compose file injects into this container's `/etc/hosts`,
+mapping `messaging-core` to `127.0.0.1` (the host loopback, where
+the embedded NATS server is bound under `network_mode: host`).
+
+### LAN discovery — Linux-only caveat
+
+This is the critical constraint: **`network_mode: host` on Docker
+Desktop (Mac/Windows) puts the container on the VM's network
+namespace, NOT your LAN**. On this Mac dev machine the worker
+container sees only `127.0.0.0/8` and cannot reach `192.168.1.51`.
+The discovery log will show `devices_found: 0` here.
+
+To validate end-to-end discovery (worker → `GET /whoami` against
+your witsaba cameras), run on a **real Linux host** — Linux server,
+Raspberry Pi, NAS — where the host's routing table includes your
+LAN interface. On that host:
+
+```bash
+docker compose up -d --build
+docker compose logs -f workers
+```
+
+You should see:
+
+```json
+{"level":"info","msg":"witsaba device found","source_ip":"192.168.1.51","name":"iot-cam","mac":"...","fw":"...","chip":"..."}
+```
+
+Mac dev support via `ipvlan` / `macvlan` (so the worker container
+sits directly on your Mac's LAN) is tracked separately and not in
+this branch.
+
+Cross-platform builds: see `docker buildx build --platform
+linux/amd64 ...` (messaging-core README has the full example).
+---
+
 ## Versioning
 
 `var version` in `cmd/workers/main.go` is the build identifier.
