@@ -2,7 +2,7 @@
 
 > Worktree: `…/local-home-assitant-worktrees/workers-discovery-initial/`
 > Branch: `feat/workers-discovery-initial`
-> Status: **closed** — 16 work-unit commits on the feature branch, all `make` targets green.
+> Status: **closed** — 18 work-unit commits on the feature branch, all `make` targets green.
 
 ## Goal
 
@@ -182,6 +182,7 @@ func ProbeWhoami(target net.IP, timeout time.Duration) (DiscoveryEvent, bool, er
 | `ad0755a` | fix(workers): errcheck — close 9 unchecked return values |
 | `3c02f91` | fix(workers): log scan stats on every tick (was silent when no targets) |
 | `7201039` | fix(workers): routetable_darwin parser is order-dependent — gateway fires before interface |
+| `be3bc29` | fix(workers): expandCIDR must normalize IP through mask (interface at .244/24 was 10/254) |
 
 ### Deviations from the original plan (logged for review)
 
@@ -223,7 +224,7 @@ GOOS=darwin GOARCH=amd64 go build ./... -> PASS (cross-build)
 ## Worktree hygiene
 
 - Branch: `feat/workers-discovery-initial`
-- 16 commits, all Conventional-Commit, every subject prefixed
+- 18 commits, all Conventional-Commit, every subject prefixed
   with the service scope `workers`.
 - No `git push` performed. Per ODD policy, push and PR creation
   are the user's decisions.
