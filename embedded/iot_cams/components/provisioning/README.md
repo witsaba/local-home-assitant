@@ -54,20 +54,85 @@ this README as a sibling-style flow.
    connection completes; if not (some Androids don't pop it
    without an actual probe URL), the operator navigates
    manually to `http://192.168.4.1/`.
-3. **The HTML form appears.** The operator types the SSID and
-   WPA2 passphrase of the Wi-Fi they want the device to join
-   long-term, and submits.
-4. **The device persists those credentials** via
+3. **The HTML form appears.** The header carries the device
+   name and a `WPA2` badge (aria-label). A short paragraph above
+   the form reminds the operator that the device only supports
+   **2.4 GHz** so they don't sit at an empty network list on a
+   band-steering 5 GHz-only router. The network dropdown is
+   auto-populated from `/scan`, sorted by RSSI (best signal
+   first) and deduped across mesh APs that share an SSID.
+   Below the dropdown is a "Add hidden network manually"
+   disclosure (`<details>`) for hidden SSIDs. Hidden networks
+   are filtered out of the scan by the scanner so this is the
+   only path to a hidden AP. `Rescan` re-runs `/scan` (also
+   wired to the auto-scan on page load; the `Rescan` button is
+   a manual override).
+4. **The operator picks the home network and enters the WPA2
+   passphrase** (8–63 ASCII chars). The form has no native
+   JavaScript fetches — submission is a native browser POST
+   to `/provision`, matching the existing C handler's
+   `application/x-www-form-urlencoded` contract. While the
+   submit is in flight the primary button stays disabled and
+   its label flips to `Connecting...` so the operator knows
+   the form took.
+5. **The device persists those credentials** via
    `esp_wifi_set_config()` and `provisioning_run()` returns. The
    softAP stays up briefly so the operator's browser gets the
    "Connected" confirmation; the application body that comes
    after `provisioning_run()` drops the AP and the device
    continues as a station.
 
+**Open networks.** Not supported. `provisioning_apply_captive_form`
+hardcodes `WIFI_AUTH_WPA2_PSK` as the station threshold and
+`esp_wifi_set_config` will not connect to an open AP under that
+threshold. The `password` input is therefore `required`.
+
 **Default credentials on the workbench.** SSID = `IoT-Cam_3091B0`,
 WPA2 passphrase = `abcd1234`. The `abcd1234` placeholder is in
 `CONFIG_PROVISIONING_SOFTAP_PASS`; ship-time packaging must replace
 both with per-fleet values.
+
+### Page layout
+
+```
++---------------------------------------------+
+| IoT-Cam-A1B2                          [WPA2]|
+| Wi-Fi setup                                  |
++---------------------------------------------+
+| Pick your home network. This device only    |
+| supports 2.4 GHz - if your router shows two  |
+| SSIDs, choose the 2.4 GHz one.              |
++---------------------------------------------+
+| Network                                      |
+|   [BestNetwork |||| -45 dBm        v]        |
+|   [OtherNetwork |||  -58 dBm         ]       |
+|   [Neighbor-Net |    -72 dBm         ]       |
+|   [- Hidden (type above) -           ]       |
+|   + Add hidden network manually              |
+|                                              |
+| Password                                     |
+|   [..............................]           |
++---------------------------------------------+
+|        [ Rescan ]    [      Connect      ]   |
++---------------------------------------------+
+```
+
+### UX changes from the previous iteration
+
+| Change | Why |
+| --- | --- |
+| Submit is a native POST (no `fetch`) | One less JS round-trip; C handler unchanged |
+| Submit button shows `Connecting...` until navigation | Operator no longer wonders if the form took |
+| `aria-live='assertive'` error / `polite` success | Screen readers announce status changes |
+| `<details>` for hidden SSID | Pure HTML disclosure, no JS toggle |
+| Dropdown sorted by RSSI, mesh SSIDs deduped | Best signal at top of list; no duplicated entries |
+| `2.4 GHz only` warning above the form | Stops band-steering routers from looking broken |
+| WPA2 badge in the header with `aria-label` | Trust signal without a decorative SVG byte cost |
+| Dark mode via `prefers-color-scheme` | Operator configures at night |
+| `prefers-reduced-motion` honored | No animation regression if we add transitions later |
+| `:user-invalid` styled with `--e` | Browser-native flag for invalid fields without JS |
+| Device name substituted into `<title>` and `<h1>` | Operator knows which device they're configuring |
+| Verbose `ESP_LOGI`/`ESP_LOGW` in this file gated with `#if 0` | Flash budget for the log format strings |
 
 ---
 
