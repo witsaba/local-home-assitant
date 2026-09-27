@@ -98,145 +98,142 @@ static esp_err_t default_captive_handler(httpd_req_t *req, httpd_err_code_t err)
 /* HTML page served by GET /. Title is the device name from the
  * orchestrator's provisioning_app_info_t (CONFIG defaults are
  * fine on a fresh bring-up). Hand-rolled to keep cJSON out
- * of the hot path for what is fundamentally a static page. */
+ * of the hot path for what is fundamentally a static page.
+ *
+ * The page is intentionally lean (currently ~5.8 KB). It is
+ * compiled into the firmware's .rodata so every byte counts.
+ * JavaScript is limited to the network dropdown (scan, dedup,
+ * sort, submit guard) — the form itself is a native POST so
+ * the /provision handler can keep its existing form-urlencoded
+ * contract unchanged. */
 static const char *HTML_FORM_BODY =
-"<!DOCTYPE html>"
-"<html lang='en'>"
-"<head>"
+"<!DOCTYPE html><html lang='en'><head>"
 "<meta charset='utf-8'>"
-"<meta name='viewport' content='width=device-width, initial-scale=1.0'>"
-"<title>IoT-Cam Provisioning</title>"
+"<meta name='viewport' content='width=device-width,initial-scale=1'>"
+"<meta name='theme-color' content='#0b1220'>"
+"<title>{deviceName} - Wi-Fi setup</title>"
 "<style>"
-"body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;margin:1.5em;max-width:32em;color:#222}"
-"h1{font-size:1.25em;margin:0 0 0.5em}"
-"p.hint{color:#555;font-size:0.9em;margin:0 0 1.5em}"
-"form{display:flex;flex-direction:column;gap:0.75em;margin-top:1em}"
-"label{font-size:0.9em;color:#333;display:flex;flex-direction:column;gap:0.25em}"
-"input[type=text],input[type=password]{padding:0.75em;font-size:1em;border:1px solid #aaa;border-radius:6px;width:100%;box-sizing:border-box}"
-"input[type=text]:focus,input[type=password]:focus{outline:2px solid #4a90e2;outline-offset:2px}"
-"button{padding:0.85em 1.25em;font-size:1em;border:0;border-radius:6px;background:#4a90e2;color:#fff;cursor:pointer}"
-"button:hover{background:#3b7fc7}"
-".ok{display:none;padding:1em;border:1px solid #4caf50;background:#e8f5e9;border-radius:6px;margin-top:1.5em}"
-".err{display:none;padding:1em;border:1px solid #f44336;background:#ffebee;border-radius:6px;margin-top:1.5em}"
-"</style>"
-"</head>"
-"<body>"
-"<h1>IoT-Cam Provisioning</h1>"
-"<p class='hint'>Select your Wi-Fi network and enter the password. "
-"The device will scan for available networks automatically.</p>"
-"<form id='p' onsubmit='return submit_form(event)'>"
-"<label>Network name (SSID)"
-"  <select id='ssid_sel' onchange='ssid_changed()' style='padding:0.75em;font-size:1em;border:1px solid #aaa;border-radius:6px;width:100%;box-sizing:border-box'>"
-"    <option value=''>-- Scanning... --</option>"
-"  </select>"
-"  <input type='text' id='ssid_other' placeholder='Type network name manually' "
-"         maxlength='32' autocomplete='off' autocapitalize='none' "
-"         style='margin-top:0.5em;display:none;padding:0.75em;font-size:1em;border:1px solid #aaa;border-radius:6px;width:100%;box-sizing:border-box'>"
-"</label>"
-"<label>Password"
-"<input type='password' name='password' required maxlength='64' autocomplete='off'>"
-"</label>"
-"<button type='button' id='scan_btn' onclick='scan_networks()' "
-"        style='background:#607d8b'>Scan Networks</button>"
-"<button type='submit'>Connect</button>"
+":root{--b:#f5f7fb;--f:#0b1220;--m:#5b6478;--l:#d8dce5;--p:#1f6feb;--w:#fff;--o:#16a34a;--e:#dc2626}"
+"@media(prefers-color-scheme:dark){:root{--b:#0b1220;--f:#e6e9ef;--m:#9aa3b2;--l:#2a3344;--p:#58a6ff;--w:#0b1220}.er{background:#3a1414;border-color:#5a2222}.ok{background:#0f2a17;border-color:#1c4426}}"
+"@media(prefers-reduced-motion:reduce){*,::before,::after{animation-duration:.01ms!important;transition-duration:.01ms!important}}"
+"*{box-sizing:border-box}"
+"html,body{margin:0;background:var(--b);color:var(--f);font:16px/1.45 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif}"
+"main{max-width:32rem;margin:0 auto;padding:1rem}"
+"h1{font-size:1.05rem;margin:.25rem 0 .25rem;font-weight:600}"
+"h1 small{display:block;color:var(--m);font-weight:400;font-size:.78rem;margin-top:.1rem}"
+".bg{float:right;font-size:.7rem;color:var(--m);border:1px solid var(--l);border-radius:999px;padding:.15rem .55rem}"
+"p.l{margin:.25rem 0 1rem;color:var(--m);font-size:.88rem}p.l b{color:var(--f)}"
+"form{border:1px solid var(--l);border-radius:12px;padding:1rem}"
+".r{margin-bottom:.85rem}.r:last-of-type{margin-bottom:0}"
+"label.lb{display:block;font-size:.8rem;font-weight:600;color:var(--m);margin-bottom:.3rem}"
+"select,input[type=text],input[type=password]{width:100%;padding:.7rem;font:inherit;color:var(--f);background:var(--b);border:1px solid var(--l);border-radius:8px}"
+"select:focus,input:focus,button:focus{outline:2px solid var(--p);outline-offset:1px;border-color:var(--p)}"
+"input:user-invalid{border-color:var(--e)}"
+"details>summary{list-style:none;cursor:pointer;color:var(--p);font-size:.82rem;padding:.2rem 0}"
+"details>summary::-webkit-details-marker,details>summary::marker{display:none}"
+"details>summary::before{content:'+ ';font-weight:700}"
+"details[open]>summary::before{content:'- '}"
+"details input{margin-top:.4rem}"
+".bn{display:flex;gap:.5rem;margin-top:1rem}"
+"button{font:inherit;font-weight:600;padding:.75rem 1rem;border-radius:8px;border:1px solid transparent;cursor:pointer}"
+".pr{background:var(--p);color:var(--w);flex:2}.pr:disabled{opacity:.55;cursor:not-allowed}"
+".se{background:transparent;color:var(--f);border-color:var(--l);flex:1}"
+".ms{margin-top:1rem;padding:.7rem .9rem;border-radius:8px;font-size:.85rem;display:none}"
+".er{background:#fde8e8;color:var(--e);border:1px solid #f5b5b5}"
+".ok{background:#e8f7ec;color:var(--o);border:1px solid #b5e1bf}"
+"</style></head><body><main>"
+"<h1>{deviceName}<small>Wi-Fi setup</small><span class='bg' aria-label='WPA2 encrypted'>WPA2</span></h1>"
+"<p class='l'>Pick your home network. <b>This device only supports 2.4 GHz</b> - if your router shows two SSIDs, choose the 2.4 GHz one.</p>"
+"<form method='POST' action='/provision' novalidate>"
+"<div class='r'>"
+"<label class='lb' for='ssid'>Network</label>"
+"<select id='ssid' name='ssid' required><option value=''>Scanning...</option></select>"
+"<details><summary>Add hidden network manually</summary>"
+"<input type='text' id='ssid_h' name='ssid_h' maxlength='32' placeholder='Network name'></details>"
+"</div>"
+"<div class='r'>"
+"<label class='lb' for='password'>Password</label>"
+"<input type='password' id='password' name='password' minlength='8' maxlength='64' autocomplete='current-password' required>"
+"</div>"
+"<div class='bn'>"
+"<button class='se' type='button' id='rescan'>Rescan</button>"
+"<button class='pr' type='submit'>Connect</button>"
+"</div>"
+"<div class='ms er' id='err' role='alert' aria-live='assertive'></div>"
+"<div class='ms ok' id='ok' role='status' aria-live='polite'></div>"
 "</form>"
-"<div class='ok' id='ok'>Connected. You can close this page.</div>"
-"<div class='err' id='err'></div>"
 "<script>"
-"function ssid_changed(){"
-"  var sel=document.getElementById('ssid_sel');"
-"  var other=document.getElementById('ssid_other');"
-"  if(sel.value==='_other_'){"
-"    other.style.display='block';"
-"    other.required=true;"
-"    other.focus();"
-"  } else {"
-"    other.style.display='none';"
-"    other.required=false;"
-"    other.value='';"
-"  }"
-"}"
-"function get_selected_ssid(){"
-"  var sel=document.getElementById('ssid_sel');"
-"  if(sel.value==='')return '';"
-"  if(sel.value==='_other_')return document.getElementById('ssid_other').value.trim();"
-"  return sel.value;"
-"}"
-"function scan_networks(){"
-"  var sel=document.getElementById('ssid_sel');"
-"  var btn=document.getElementById('scan_btn');"
-"  sel.innerHTML=\"<option value=''>-- Scanning... --</option>\";"
-"  btn.disabled=true;"
-"  btn.textContent='Scanning...' ;"
-"  fetch('/scan')"
-"    .then(function(r){return r.json();})"
-"    .then(function(nets){"
-"      sel.innerHTML='';"
-"      if(!nets||nets.length===0){"
-"        var opt=document.createElement('option');"
-"        opt.value='';"
-"        opt.textContent='No networks found — check your router';"
-"        sel.appendChild(opt);"
-"      } else {"
-"        nets.forEach(function(n){"
-"          var opt=document.createElement('option');"
-"          opt.value=n.ssid;"
-"          /* RSSI bar: -30=excellent, -70=weak */"
-"          var bars='?';"
-"          var r=n.rssi;"
-"          if(r>-50)bars='****';"
-"          else if(r>-60)bars='*** ' ;"
-"          else if(r>-70)bars='**  ' ;"
-"          else if(r>-80)bars='*   ' ;"
-"          opt.textContent=n.ssid+' ('+bars+' signal, '+r+' dBm)';"
-"          sel.appendChild(opt);"
-"        });"
-"        /* Allow manual entry for networks not detected */"
-"        var opt=document.createElement('option');"
-"        opt.value='_other_';"
-"        opt.textContent='Other (type manually)';"
-"        sel.appendChild(opt);"
-"      }"
-"      btn.disabled=false;"
-"      btn.textContent='Scan Networks' ;"
-"    })"
-"    .catch(function(){"
-"      sel.innerHTML=\"<option value=''>Scan failed — try again</option>\";"
-"      btn.disabled=false;"
-"      btn.textContent='Scan Networks' ;"
-"    });"
-"}"
-"function submit_form(e){"
-"  e.preventDefault();"
-"  var ssid=get_selected_ssid().trim();"
-"  if(!ssid){alert('Please scan for networks or select Other and type the SSID.');return false;}"
-"  var password=document.getElementById('p').password.value;"
-"  var body='ssid='+encodeURIComponent(ssid)+'&password='+encodeURIComponent(password);"
-"  fetch('/provision',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:body})"
-"    .then(function(r){return r.json().then(function(j){return{ok:r.ok,status:r.status,body:j};});})"
-"    .then(function(o){"
-"      if(o.ok){document.getElementById('ok').style.display='block';document.getElementById('p').style.display='none';}"
-"      else{var err=document.getElementById('err');err.textContent='Error '+(o.status||'?')+': '+(o.body&&o.body.error||'unknown');err.style.display='block';}"
-"    })"
-"    .catch(function(err){var e=document.getElementById('err');e.textContent='Network error: '+err;e.style.display='block';});"
-"  return false;"
-"}"
-"/* Auto-scan on page load */"
-"scan_networks();"
+"(function(){"
+"var s=document.getElementById('ssid'),h=document.getElementById('ssid_h'),p=document.getElementById('password'),b=document.getElementById('rescan'),e=document.getElementById('err'),sub=document.querySelector('.pr');"
+"function E(m){e.textContent=m;e.style.display='block'}"
+"function bars(r){return r>-50?'||||':r>-60?'||| ':r>-70?'||  ':r>-80?'|   ':'?'}"
+"function scan(){s.disabled=true;b.disabled=true;fetch('/scan',{cache:'no-store'}).then(function(r){return r.json()}).then(function(l){"
+"var seen={};(l||[]).forEach(function(n){if(!seen[n.ssid]||seen[n.ssid].rssi<n.rssi)seen[n.ssid]=n;});"
+"var sr=Object.keys(seen).map(function(k){return seen[k]}).sort(function(a,b){return b.rssi-a.rssi});"
+"s.innerHTML='';if(!sr.length){var o=document.createElement('option');o.value='';o.textContent='No 2.4 GHz networks found';s.appendChild(o);}else{"
+"sr.forEach(function(n){var o=document.createElement('option');o.value=n.ssid;o.textContent=n.ssid+' '+bars(n.rssi)+' '+n.rssi+' dBm';s.appendChild(o);});"
+"var o=document.createElement('option');o.value='_hid_';o.textContent='- Hidden (type above) -';s.appendChild(o);}"
+"s.disabled=false;b.disabled=false;}).catch(function(){s.disabled=false;b.disabled=false;E('Scan failed - reload to retry');});}"
+"s.addEventListener('change',function(){h.required=s.value==='_hid_';if(s.value==='_hid_')h.focus();});"
+"document.querySelector('form').addEventListener('submit',function(ev){"
+"var ssid=s.value==='_hid_'?h.value.trim():s.value;"
+"if(!ssid){ev.preventDefault();E('Choose a network or add a hidden one');return;}"
+"if(ssid.length>32){ev.preventDefault();E('Network name too long');return;}"
+"if(p.value.length<8){ev.preventDefault();E('Password must be at least 8 characters');return;}"
+"if(s.value==='_hid_'){var opt=s.querySelector('option[value=\"_hid_\"]');if(opt){opt.value=ssid;opt.textContent=ssid+' (manual)';s.value=ssid;}}"
+"sub.disabled=true;sub.textContent='Connecting...';});"
+"b.addEventListener('click',scan);scan();"
+"})();"
 "</script>"
-"</body></html>";
+"</main></body></html>";
+
+/* Substitute {deviceName} occurrences in the HTML body with the
+ * CONFIG-defined device name. The placeholder is 12 bytes; the
+ * device name is a Kconfig string whose length is bounded at
+ * build time (PROV_NAME_MAX_LEN), so the output buffer is the
+ * input size plus a small headroom. Returns the final byte
+ * length written to `out` (excluding NUL). */
+static size_t html_substitute_device_name(const char *in, size_t in_len,
+                                          char *out, size_t out_size)
+{
+    const char *name = CONFIG_PROVISIONING_DEVICE_NAME;
+    size_t name_len = strlen(name);
+    size_t o = 0;
+    for (size_t i = 0; i < in_len; ++i) {
+        if (i + 12 <= in_len &&
+            memcmp(in + i, "{deviceName}", 12) == 0 &&
+            o + name_len + 1 < out_size) {
+            memcpy(out + o, name, name_len);
+            o += name_len;
+            i += 11; /* +1 from the loop */
+        } else if (o + 1 < out_size) {
+            out[o++] = in[i];
+        }
+    }
+    out[o] = '\0';
+    return o;
+}
 
 /* GET / — return the HTML form. */
 static esp_err_t root_get_handler(httpd_req_t *req)
 {
-    /* Sniff Accept header for a substring of "json" / curl etc.
-     * Returning HTML by default keeps the form the first thing
-     * a phone browser sees; JSON consumers (the Espressif CLI
-     * tool, e.g.) can also ask for /whoami. */
-    int total = strlen(HTML_FORM_BODY);
     httpd_resp_set_type(req, "text/html; charset=utf-8");
     httpd_resp_set_hdr(req, "Cache-Control", "no-store");
-    return httpd_resp_send(req, HTML_FORM_BODY, total);
+    size_t body_len = strlen(HTML_FORM_BODY);
+    /* Worst case: body + 32-byte device name per replacement.
+     * The page has two {deviceName} occurrences, so 64 bytes
+     * of headroom is comfortable. */
+    size_t buf_size = body_len + 64;
+    char *buf = (char *)malloc(buf_size);
+    if (!buf) {
+        /* OOM: serve the body without substitution. */
+        return httpd_resp_send(req, HTML_FORM_BODY, body_len);
+    }
+    size_t out_len = html_substitute_device_name(
+        HTML_FORM_BODY, body_len, buf, buf_size);
+    esp_err_t r = httpd_resp_send(req, buf, out_len);
+    free(buf);
+    return r;
 }
 
 /* Decode URL-encoded form body into a small key/value store.
@@ -606,10 +603,22 @@ static esp_err_t default_captive_handler(httpd_req_t *req, httpd_err_code_t err)
 {
     (void)err;
     if (req->method == HTTP_GET) {
-        int total = strlen(HTML_FORM_BODY);
+        /* Same body as root_get_handler — naive captive-portal probes
+         * should still see the form, including the device-name
+         * substitution. */
         httpd_resp_set_type(req, "text/html; charset=utf-8");
         httpd_resp_set_hdr(req, "Cache-Control", "no-store");
-        return httpd_resp_send(req, HTML_FORM_BODY, total);
+        size_t body_len = strlen(HTML_FORM_BODY);
+        size_t buf_size = body_len + 64;
+        char *buf = (char *)malloc(buf_size);
+        if (!buf) {
+            return httpd_resp_send(req, HTML_FORM_BODY, body_len);
+        }
+        size_t out_len = html_substitute_device_name(
+            HTML_FORM_BODY, body_len, buf, buf_size);
+        esp_err_t r = httpd_resp_send(req, buf, out_len);
+        free(buf);
+        return r;
     }
     httpd_resp_set_status(req, "404 Not Found");
     httpd_resp_sendstr(req, "Not Found");
