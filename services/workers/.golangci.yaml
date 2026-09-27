@@ -1,0 +1,21 @@
+version: "2"
+
+linters:
+  default: none
+  enable:
+    - errcheck       # unchecked errors
+    - govet          # suspicious constructs
+    - ineffassign    # unused assignments
+    - staticcheck    # bug finder
+    - unused         # unused identifiers
+
+formatters:
+  enable:
+    - gofmt
+
+issues:
+  max-issues-per-linter: 50
+  exclude-rules:
+    - path: _test\.go
+      linters:
+        - errcheck
