@@ -118,4 +118,5 @@ services/workers/README.md               ← Add "Docker" section
 | 4 | `8f55604` | chore(git): ignore .env so users do not commit local overrides |
 | 5 | `a2395c1` | chore(messaging-core): .dockerignore — drop build artifacts, IDE, CI from build context |
 | 6 | `691f5cc` | feat(messaging-core): multi-stage Dockerfile (golang:1.26.3-alpine3.23 -> alpine:3.23) |
-| 7 | (this commit) | docs(messaging-core): Docker section (build, run, image details, remote clients caveat, linux-only) |
+| 7 | `4d935c5` | docs(messaging-core): Docker section (build, run, image details, remote clients caveat, linux-only) |
+| 8 | (this commit) | chore(workers): .dockerignore — same exclusions as messaging-core |
