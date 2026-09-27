@@ -103,6 +103,18 @@ services:
       NATS_HOST: ${NATS_HOST:-messaging-core}
       NATS_PORT: ${NATS_PORT:-4222}
       LOG_LEVEL: ${LOG_LEVEL:-info}
+      # PG_* are read by the future messaging-core DB consumer; today
+      # the binary loads them but does not open a connection. PG_PASSWORD
+      # defaults to PG_MESSAGING_CORE_PASSWORD so operators only set one
+      # value per role in .env; set PG_PASSWORD explicitly to override.
+      PG_HOST: ${PG_HOST:-127.0.0.1}
+      PG_PORT: ${PG_PORT:-${POSTGRES_PORT:-5432}}
+      PG_DATABASE: ${PG_DATABASE:-${POSTGRES_DB:-witsaba}}
+      PG_USER: ${PG_USER:-pg-messaging-core}
+      PG_PASSWORD: ${PG_PASSWORD:-${PG_MESSAGING_CORE_PASSWORD}}
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   workers:
     build:
@@ -117,8 +129,12 @@ services:
     network_mode: host
     restart: unless-stopped
     depends_on:
-      - messaging-core                # v1 worker does not talk to NATS yet;
-                                       # declared for intent / ordering
+      messaging-core:                # v1 worker does not talk to NATS yet;
+        condition: service_started   # declared for intent / ordering; if
+                                       # messaging-core later exposes a
+                                       # healthcheck, switch to service_healthy
+      postgres:
+        condition: service_healthy
     # Same /etc/hosts entry as messaging-core so any future NATS
     # client in this container can dial nats://messaging-core:4222.
     extra_hosts:
@@ -131,3 +147,12 @@ services:
       # Forwarded for future NATS clients; v1 worker does not consume it.
       NATS_HOST: ${NATS_HOST:-messaging-core}
       NATS_PORT: ${NATS_PORT:-4222}
+      # Postgres connection for the devices UPSERT path. Resolved against
+      # the host loopback (Postgres binds to 127.0.0.1:5432). PG_PASSWORD
+      # defaults to PG_WORKER_PASSWORD so operators only set one value per
+      # role in .env; set PG_PASSWORD explicitly to override.
+      PG_HOST: ${PG_HOST:-127.0.0.1}
+      PG_PORT: ${PG_PORT:-${POSTGRES_PORT:-5432}}
+      PG_DATABASE: ${PG_DATABASE:-${POSTGRES_DB:-witsaba}}
+      PG_USER: ${PG_USER:-pg-worker}
+      PG_PASSWORD: ${PG_PASSWORD:-${PG_WORKER_PASSWORD}}
