@@ -132,7 +132,7 @@ func run() int {
 	)
 
 	scheduler := worker.New([]worker.Job{discoveryJob}, emit, log)
-	consumer := discovery.NewConsumer(events, log)
+	consumer := discovery.NewConsumer(events, repo, log)
 
 	// SIGINT/SIGTERM cancels ctx via signal.NotifyContext.
 	ctx, stopSignals := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
