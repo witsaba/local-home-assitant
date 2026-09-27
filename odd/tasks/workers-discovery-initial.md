@@ -2,7 +2,7 @@
 
 > Worktree: `…/local-home-assitant-worktrees/workers-discovery-initial/`
 > Branch: `feat/workers-discovery-initial`
-> Status: **closed** — 10 work-unit commits on the feature branch, all `make` targets green.
+> Status: **closed** — 12 work-unit commits on the feature branch, all `make` targets green.
 
 ## Goal
 
@@ -179,6 +179,7 @@ func ProbeWhoami(target net.IP, timeout time.Duration) (DiscoveryEvent, bool, er
 | `45b767e` | fix(workers): consumer drain exits cleanly on closed empty channel |
 | `a16e59a` | chore(workers): gofmt cleanup in worker package |
 | `dd5199c` | docs(workers): service README with quick start, config, architecture, verify, follow-ups |
+| `ad0755a` | fix(workers): errcheck — close 9 unchecked return values |
 
 ### Deviations from the original plan (logged for review)
 
@@ -210,8 +211,9 @@ make tidy   -> idempotent (no diff after the second run)
 make build  -> bin/workers (9.6M, version-stamped 0.1.0-dev-45b767e)
 make fmt    -> 3 files collapsed to one-line var declarations; committed
 make clean-testcache -> clean
-make lint   -> prints install hint; golangci-lint v2 not on PATH
-                (acceptance depends on it being installed locally)
+make lint   -> 0 issues (golangci-lint v2 from $HOME/go/bin; 9 errcheck
+                findings fixed in commit ad0755a — one production fix in
+                probe/whoami.go, eight explicit discards in tests)
 GOOS=linux  GOARCH=amd64 go build ./... -> PASS (cross-build)
 GOOS=darwin GOARCH=amd64 go build ./... -> PASS (cross-build)
 ```
@@ -219,7 +221,7 @@ GOOS=darwin GOARCH=amd64 go build ./... -> PASS (cross-build)
 ## Worktree hygiene
 
 - Branch: `feat/workers-discovery-initial`
-- 10 commits, all Conventional-Commit, every subject prefixed
+- 12 commits, all Conventional-Commit, every subject prefixed
   with the service scope `workers`.
 - No `git push` performed. Per ODD policy, push and PR creation
   are the user's decisions.
