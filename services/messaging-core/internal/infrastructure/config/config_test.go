@@ -29,6 +29,9 @@ func TestLoad_Defaults(t *testing.T) {
 	if cfg.STREAMPort != 8080 {
 		t.Errorf("STREAMPort: got %d, want %d", cfg.STREAMPort, 8080)
 	}
+	if cfg.APIPort != 8081 {
+		t.Errorf("APIPort: got %d, want %d", cfg.APIPort, 8081)
+	}
 	if cfg.PGHost != "127.0.0.1" {
 		t.Errorf("PGHost: got %q, want %q", cfg.PGHost, "127.0.0.1")
 	}
@@ -64,6 +67,7 @@ func TestLoad_Overrides(t *testing.T) {
 	t.Setenv("LOG_LEVEL", "DEBUG")
 	t.Setenv("NATS_DATA_DIR", "/var/lib/nats")
 	t.Setenv("STREAM_PORT", "9000")
+	t.Setenv("API_PORT", "9090")
 	t.Setenv("MESSAGING_CORE_PG_HOST", "192.168.1.10")
 	t.Setenv("MESSAGING_CORE_PG_PORT", "5433")
 	t.Setenv("MESSAGING_CORE_PG_DATABASE", "testdb")
@@ -92,6 +96,9 @@ func TestLoad_Overrides(t *testing.T) {
 	}
 	if cfg.STREAMPort != 9000 {
 		t.Errorf("STREAMPort: got %d, want %d", cfg.STREAMPort, 9000)
+	}
+	if cfg.APIPort != 9090 {
+		t.Errorf("APIPort: got %d, want %d", cfg.APIPort, 9090)
 	}
 	if cfg.PGHost != "192.168.1.10" {
 		t.Errorf("PGHost: got %q, want %q", cfg.PGHost, "192.168.1.10")
@@ -171,6 +178,15 @@ func TestLoad_EmptyPGHostFallsBack(t *testing.T) {
 	}
 }
 
+func TestLoad_OutOfRangeAPIPort(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("API_PORT", "0")
+	t.Setenv("MESSAGING_CORE_PG_PASSWORD", "secret")
+	if _, err := Load(); err == nil {
+		t.Fatal("expected error for API_PORT=0, got nil")
+	}
+}
+
 func TestLoad_OutOfRangeSTREAMPort(t *testing.T) {
 	clearEnv(t)
 	t.Setenv("STREAM_PORT", "70000")
@@ -195,7 +211,7 @@ func clearEnv(t *testing.T) {
 	t.Helper()
 	keys := []string{
 		"NATS_HOST", "NATS_PORT", "LOG_LEVEL", "NATS_DATA_DIR",
-		"STREAM_PORT",
+		"STREAM_PORT", "API_PORT",
 		"MESSAGING_CORE_PG_HOST", "MESSAGING_CORE_PG_PORT", "MESSAGING_CORE_PG_DATABASE", "MESSAGING_CORE_PG_USER", "MESSAGING_CORE_PG_PASSWORD",
 		"MESSAGING_CORE_PG_MAX_CONNS", "MESSAGING_CORE_PG_MIN_CONNS", "MESSAGING_CORE_PG_MAX_CONN_LIFETIME", "MESSAGING_CORE_PG_MAX_CONN_IDLE_TIME",
 	}

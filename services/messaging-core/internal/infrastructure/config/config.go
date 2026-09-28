@@ -19,6 +19,7 @@ const (
 	defaultLogLevel  = "info"
 	defaultDataDir   = ""
 	defaultSTREAMPort = 8080
+	defaultAPIPort    = 8081
 )
 
 // Config is the resolved, validated runtime configuration.
@@ -39,6 +40,10 @@ type Config struct {
 	// STREAMPort is the HTTP/WS port for the camera streaming gateway.
 	// Defaults to 8080.
 	STREAMPort int
+
+	// APIPort is the HTTP REST API port for the device list endpoints.
+	// Defaults to 8081.
+	APIPort int
 
 	// Postgres connection parameters.
 	PGHost            string
@@ -62,6 +67,7 @@ func Load() (Config, error) {
 		DataDir:  getEnv("NATS_DATA_DIR", defaultDataDir),
 
 		STREAMPort: envInt("STREAM_PORT", defaultSTREAMPort),
+		APIPort:    envInt("API_PORT", defaultAPIPort),
 
 		// Postgres defaults — use MESSAGING_CORE_PG_* env vars.
 		PGHost:     envStr("MESSAGING_CORE_PG_HOST", "127.0.0.1"),
@@ -157,6 +163,9 @@ func validate(cfg Config) error {
 	}
 	if cfg.STREAMPort < 1 || cfg.STREAMPort > 65535 {
 		return fmt.Errorf("STREAM_PORT: must be in [1, 65535], got %d", cfg.STREAMPort)
+	}
+	if cfg.APIPort < 1 || cfg.APIPort > 65535 {
+		return fmt.Errorf("API_PORT: must be in [1, 65535], got %d", cfg.APIPort)
 	}
 	return nil
 }

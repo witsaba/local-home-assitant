@@ -11,12 +11,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
 	"github.com/witsaba/local-home-assitant/services/messaging-core/internal/application/ports"
+	"github.com/witsaba/local-home-assitant/services/messaging-core/internal/infrastructure/api"
 	"github.com/witsaba/local-home-assitant/services/messaging-core/internal/infrastructure/config"
 	"github.com/witsaba/local-home-assitant/services/messaging-core/internal/infrastructure/db"
 	"github.com/witsaba/local-home-assitant/services/messaging-core/internal/infrastructure/devices"
@@ -151,10 +153,29 @@ func run() int {
 	)
 	wsSrv.Start()
 
+	// — REST API server (GET /api/devices/active) —
+	apiHandler := api.NewHandler(devRepo, log)
+	apiSrv := &http.Server{
+		Addr:    fmt.Sprintf(":%d", cfg.APIPort),
+		Handler: apiHandler,
+	}
+	go func() {
+		if err := apiSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Error("API server failed",
+				ports.Field{Key: "err", Value: err.Error()},
+				ports.Field{Key: "addr", Value: apiSrv.Addr},
+			)
+		}
+	}()
+	log.Info("API server started",
+		ports.Field{Key: "addr", Value: apiSrv.Addr},
+	)
+
 	// — Block on SIGINT / SIGTERM —
 	log.Info("messaging-core fully started",
 		ports.Field{Key: "nats", Value: fmt.Sprintf("%s:%d", cfg.Host, cfg.Port)},
 		ports.Field{Key: "stream", Value: fmt.Sprintf(":%d", cfg.STREAMPort)},
+		ports.Field{Key: "api", Value: fmt.Sprintf(":%d", cfg.APIPort)},
 	)
 
 	<-ctx.Done()
@@ -164,20 +185,27 @@ func run() int {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
 
-	// 1. Close the stream hub (disconnects all chip clients, notifies viewers).
+	// 1. Shutdown the API server (drains in-flight requests).
+	if err := apiSrv.Shutdown(shutdownCtx); err != nil && !errors.Is(err, context.Canceled) {
+		log.Error("API server shutdown error",
+			ports.Field{Key: "err", Value: err.Error()},
+		)
+	}
+
+	// 2. Close the stream hub (disconnects all chip clients, notifies viewers).
 	camHub.Close(shutdownCtx)
 
-	// 2. Close the WS server.
+	// 3. Close the WS server.
 	if err := wsSrv.Close(); err != nil {
 		log.Error("closing WS server failed",
 			ports.Field{Key: "err", Value: err.Error()},
 		)
 	}
 
-	// 3. Close the Postgres pool.
+	// 4. Close the Postgres pool.
 	db.Close()
 
-	// 4. Shutdown NATS.
+	// 5. Shutdown NATS.
 	if err := natssrv.Shutdown(shutdownCtx); err != nil && !errors.Is(err, context.Canceled) {
 		log.Error("NATS shutdown error",
 			ports.Field{Key: "err", Value: err.Error()},
