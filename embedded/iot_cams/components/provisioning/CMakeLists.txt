@@ -26,5 +26,5 @@ idf_component_register(
          "src/sta_server.c"
          "src/wifi_cred.c"
     INCLUDE_DIRS "include"
-    REQUIRES esp_wifi esp_netif esp_event nvs_flash mdns esp_http_server json
+    REQUIRES esp_wifi esp_netif esp_event nvs_flash mdns esp_http_server json cam_reader
 )
