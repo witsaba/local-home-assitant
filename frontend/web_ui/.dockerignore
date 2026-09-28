@@ -1,0 +1,35 @@
+# Build artefacts — produced inside the image, not shipped as context.
+dist
+server
+tmp
+.cache
+.mf
+.rollup.cache
+coverage
+
+# Local install + dev files.
+node_modules
+.pnpm-store
+
+# VCS + IDE noise.
+.git
+.gitkeep
+.github
+.vscode
+.idea
+.DS_Store
+
+# Environment + secrets — never bake into images.
+.env
+.env.*
+!.env.example
+
+# Logs + test artefacts.
+*.log
+logs
+tsconfig.tsbuildinfo
+
+# Docs that are not needed in the build context.
+README.md
+CLAUDE.md
+AGENTS.md
