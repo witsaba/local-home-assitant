@@ -80,6 +80,11 @@ HTTP 503 on mutex timeout; HTTP 500 on sensor failure.
 - The board/conventional-commit style engram demands `idf.py build` end-to-end with no warnings, per `embedded/iot_cams/build-policy`.
 - Work-unit commit: `chore(iot-cams): record idf.py build verification`
 
+### W5 — post-flash operator fixes (recorded after acceptance testing on hardware)
+- **vflip fix.** Operator flashed W3+W4 firmware, called /capture, the JPEG came back upside-down. AI-Thinker ESP32-CAM ships with the OV2640 sensor mounted vertically inverted; one `sensor->set_vflip(sensor, 1)` after `esp_camera_init()` fixes every future capture. Constant `CAM_READER_VFLIP=1` at the top of cam_reader.c so a different mount only needs a single-line bump. Work-unit commit: `fix(cam-reader): vflip the OV2640 frame to match AI-Thinker mount`.
+- **PSRAM enable + 1.5 MB partition table bump.** Operator pulled a /capture frame; image lacked definition. Resolution is the biggest lever. To safely run XGA and above we need PSRAM as a malloc-capable region (4 MB onboard, never enabled). Adds the project-level PSRAM block to sdkconfig.defaults (mode quad / 40 MHz / malloc). PSRAM heap-management code adds ~60 KB; the IDF default 1 MB factory partition was at 99% full (1% free warning). Switch to a custom 1.5 MB factory partition per the project's pre-existing comment in sdkconfig.defaults that already anticipated this bump. No cam_reader.c change — the CONFIG_SPIRAM_SUPPORT gate from W4 is what makes this a one-file project-config flip. Work-unit commit: `feat(iot-cams): enable PSRAM (CONFIG_SPIRAM=y) + 1.5 MB partition table`.
+- Resulting binary: `iot_cams.bin` 0xfc2e0 bytes, 0x83d20 bytes (34% free) on the factory partition.
+
 ### W0 — ODD task file (this document)
 - Work-unit commit: `docs(odd): capture-endpoint task plan`
 
@@ -93,11 +98,13 @@ HTTP 503 on mutex timeout; HTTP 500 on sensor failure.
 
 ## Acceptance criteria
 
-1. `idf.py build` exits 0 on a freshly cleaned tree, with the same warning count as `main` (zero new warnings).
-2. `GET http://<device-ip>/capture` returns a valid JPEG that opens in a standard image viewer.
-3. `GET /capture` issued twice in parallel results in one 200 + one 503 (or both 200, serialized), never a crash, never both 500.
-4. The device stays in softAP provisioning until credentials are committed (camera init does not block provisioning).
-5. The softAP httpd (port 80 on `192.168.4.1`) keeps serving `/` for the duration of provisioning — `/capture` is intentionally not registered there.
+1. `idf.py build` exits 0 on a freshly cleaned tree, with the same warning count as `main` (zero new warnings). ✅
+2. `GET http://<device-ip>/capture` returns a valid JPEG that opens in a standard image viewer. ✅ operator-confirmed.
+3. `GET /capture` issued twice in parallel results in one 200 + one 503 (or both 200, serialized), never a crash, never both 500. (Not yet operator-tested.)
+4. The device stays in softAP provisioning until credentials are committed (camera init does not block provisioning). ✅
+5. The softAP httpd (port 80 on `192.168.4.1`) keeps serving `/` for the duration of provisioning — `/capture` is intentionally not registered there. ✅
+6. /capture image comes back right-side-up. ✅ operator-confirmed after W5 vflip fix.
+7. PSRAM enabled so the camera driver has room to grow resolution / frame buffer count without bumping DRAM ceiling. ✅ operator-confirmed after W5 PSRAM work.
 
 ## Tracking
 
