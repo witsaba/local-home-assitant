@@ -1,0 +1,25 @@
+## components/cam_reader/idf_component.yml
+##
+## Manifest for the iot_cams camera-reader component.
+##
+## Lifts the AI-Thinker ESP32-CAM OV2640 bring-up from
+## `../rural_home_assistant/backend/iot-camera/components/cam_reader/`
+## verbatim, and adds a binary-semaphore guard that serializes
+## access to the camera hardware across any future consumer
+## (httpd, FreeRTOS tasks, future WebSocket / MQTT paths).
+##
+## VENDORING: today this directory is path-referenced from
+## `embedded/iot_cams/main/idf_component.yml` via `path:`. To
+## lift it to a separately versioned upstream component, move
+## the contents to a new repo, register the URL here, and swap
+## the consumer's `path:` for the URL. No code changes needed.
+version: 0.1.0
+description: Camera reader for iot_cams ESP-IDF firmware. Owns the AI-Thinker OV2640 bring-up and a binary-semaphore mutex that serializes capture across httpd, future WebSocket / MQTT consumers.
+url: https://example.invalid/iot_cams/cam_reader
+
+dependencies:
+  ## `espressif/esp32-camera` — the upstream sensor driver.
+  ## `*` lets the IDF component manager pin a concrete version
+  ## compatible with ESP-IDF v5.5.3 in `dependencies.lock`
+  ## during `idf.py reconfigure`.
+  espressif/esp32-camera: "*"

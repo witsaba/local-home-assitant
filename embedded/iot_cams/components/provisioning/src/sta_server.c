@@ -1,17 +1,21 @@
 /* sta_server.c — STA-bound HTTP server for post-provisioning device
- * identity and control endpoints.
+ * identity and capture endpoints.
  *
  * PURPOSE
  *   After provisioning completes and the device has joined the home
  *   AP (STA mode), this module starts a lightweight httpd on the
  *   station interface. It exposes /whoami for device discovery and
- *   registration by the home-assistant backend.
+ *   registration by the home-assistant backend, and /capture for
+ *   taking single JPEG frames from the OV2640 sensor.
  *
  * LIFECYCLE
  *   - NOT started during softAP provisioning (the captive portal
- *     serves provisioning UX; /whoami is intentionally absent so
- *     unprovisioned devices don't appear in discovery).
- *   - Started by provisioning_join_ap() once the station has an IP.
+ *     serves provisioning UX; /whoami + /capture are intentionally
+ *     absent so unprovisioned devices don't appear in discovery
+ *     and operators on the softAP can't pull frames before WiFi
+ *     is configured).
+ *   - Started by provisioning_join_ap() / provisioning_run() once
+ *     the station has an IP.
  *   - Runs for the lifetime of the device.
  *
  * PORT
@@ -19,14 +23,21 @@
  *   (no inbound internet routing), so port 80 is safe and convenient.
  *
  * ENDPOINTS
- *   - GET /whoami — device identity JSON (mac, name, description,
+ *   - GET /whoami  — device identity JSON (mac, name, description,
  *     fw, chip). Same contract as esp32-cam-surveillance /whoami
  *     for cross-device compatibility.
+ *   - GET /capture — single JPEG frame from the OV2640. Mirrors the
+ *     esp32-cam-surveillance /capture contract: image/jpeg body,
+ *     Content-Disposition: inline; filename=capture.jpg, no chunking,
+ *     no base64. Concurrency is guarded by a binary semaphore in
+ *     cam_reader — concurrent callers past the 5 s wait budget get
+ *     HTTP 503.
  *
  * SECURITY
  *   The device is on a trusted private LAN by design. No
  *   authentication on /whoami — the MAC is the canonical identity.
- *   Future endpoints (config, control) will add auth if needed.
+ *   /capture is similarly open because the LAN is trusted. Future
+ *   endpoints (config, control) will add auth if needed.
  */
 #include "sta_server.h"
 
@@ -39,6 +50,8 @@
 #include "esp_system.h"
 #include "esp_netif.h"
 #include "esp_wifi.h"
+
+#include "cam_reader.h"
 
 static const char *TAG = "sta_srv";
 
@@ -136,6 +149,62 @@ static esp_err_t whoami_get_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+/* ---------- /capture ---------- */
+
+/* GET /capture — single JPEG frame from the OV2640.
+ *
+ * Concurrency contract: cam_reader owns the camera mutex; this
+ * handler maps the three documented outcomes to HTTP status codes:
+ *
+ *   - ESP_ERR_TIMEOUT   → 503 (mutex not acquired; do NOT call
+ *                         cam_reader_release on this path)
+ *   - sensor failure    → 500 + cam_reader_release(NULL) so the
+ *                         mutex is given back to the driver pool
+ *   - success           → 200 + httpd_resp_send + cam_reader_release(fb)
+ *
+ * The mutex MUST be released on every path that took it. The helper
+ * makes that explicit: cam_reader_release(NULL) is permitted and
+ * only gives the mutex (the buffer return becomes a no-op). */
+static esp_err_t capture_get_handler(httpd_req_t *req)
+{
+    if (req == NULL) {
+        return ESP_FAIL;
+    }
+
+    camera_fb_t *fb = NULL;
+    esp_err_t r = cam_reader_capture(&fb);
+
+    if (r == ESP_ERR_TIMEOUT) {
+        ESP_LOGW(TAG, "capture: mutex timeout; another caller busy");
+        httpd_resp_set_status(req, "503 Service Unavailable");
+        httpd_resp_set_type(req, "text/plain");
+        httpd_resp_sendstr(req, "Camera busy, please try again");
+        return ESP_OK;
+    }
+    if (r != ESP_OK || fb == NULL) {
+        ESP_LOGE(TAG, "capture: sensor returned no frame");
+        httpd_resp_send_500(req);
+        cam_reader_release(NULL);  /* drop the mutex */
+        return ESP_FAIL;
+    }
+
+    httpd_resp_set_type(req, "image/jpeg");
+    httpd_resp_set_hdr(req, "Content-Disposition",
+                       "inline; filename=capture.jpg");
+    httpd_resp_set_hdr(req, "Cache-Control",
+                       "no-store, no-cache, must-revalidate, max-age=0");
+
+    esp_err_t res = httpd_resp_send(req, (const char *)fb->buf, fb->len);
+    cam_reader_release(fb);
+
+    if (res == ESP_OK) {
+        ESP_LOGD(TAG, "capture: served frame");
+    } else {
+        ESP_LOGE(TAG, "capture: httpd_resp_send: %s", esp_err_to_name(res));
+    }
+    return res;
+}
+
 /* ---------- lifecycle ---------- */
 
 esp_err_t sta_server_start(void)
@@ -173,7 +242,25 @@ esp_err_t sta_server_start(void)
         return err;
     }
 
-    ESP_LOGI(TAG, "STA server running on port 80, /whoami registered");
+    /* Register /capture. Same handle, same audience (post-
+     * provisioning LAN clients). Concurrency guard owned by
+     * cam_reader; the handler here is a thin wrapper that maps
+     * the cam_reader_capture outcomes to HTTP status codes. */
+    httpd_uri_t capture_uri = {
+        .uri       = "/capture",
+        .method    = HTTP_GET,
+        .handler   = capture_get_handler,
+        .user_ctx  = NULL,
+    };
+    err = httpd_register_uri_handler(s_sta_httpd, &capture_uri);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "register /capture failed: %s", esp_err_to_name(err));
+        httpd_stop(s_sta_httpd);
+        s_sta_httpd = NULL;
+        return err;
+    }
+
+    ESP_LOGI(TAG, "STA server running on port 80, /whoami and /capture registered");
     return ESP_OK;
 }
 

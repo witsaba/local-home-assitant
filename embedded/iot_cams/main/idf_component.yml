@@ -2,16 +2,24 @@
 ##
 ## Manifest for the iot_cams application entry-point component.
 ##
-## Declares ONE path dependency: the WiFi provisioning component
-## living at ../components/provisioning/. The component manager
-## pulls it into the build graph during `idf.py reconfigure`, just
-## like a managed component pulled from a registry. The same
-## `dependencies:` key (`provisioning: { path: <url> }`) works when
-## the component is later lifted to a separate git repository —
-## only the URL swaps in.
+## Path dependencies (build graph local components):
+##   - provisioning — wraps the captive-portal + STA server httpd.
+##                    Drives WiFi and device-identity endpoints
+##                    (/, /provision, /scan, /whoami).
+##   - cam_reader   — owns the AI-Thinker OV2640 sensor bring-up
+##                    and the binary-semaphore guard around
+##                    esp_camera_fb_get. Powers the GET /capture
+##                    endpoint on the STA server.
+##
+## Each component is path-dep'd here so they resolve identically
+## to a managed component pulled from a registry. Lifting either
+## to a separate git repository is a URL swap with no code
+## changes.
 
 version: 0.1.0
-description: iot_cams ESP-IDF application — wires the provisioning package into the firmware entry point.
+description: iot_cams ESP-IDF application — wires the provisioning package and the camera reader into the firmware entry point.
 dependencies:
   provisioning:
     path: ../components/provisioning
+  cam_reader:
+    path: ../components/cam_reader

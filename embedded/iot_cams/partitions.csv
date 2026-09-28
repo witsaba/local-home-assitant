@@ -1,0 +1,25 @@
+# iot_cams partition table.
+#
+# Modeled on esp32-cam-surveillance's `firmware/sdkconfig.defaults`
+# convention. The IDF default single-MB factory partition stops
+# fitting the firmware once PSRAM is enabled (PSRAM heap
+# management code adds ~60 KB to the binary; `app_check_size`
+# prints "1% free" warnings). 1.5 MB leaves comfortable headroom
+# for the camera reader, the provisioning httpd, and any
+# future WebSocket control plane without needing a follow-up
+# partition bump.
+#
+# Format: name, type, subtype, offset, size.
+# Layout on a 4 MB SPI flash:
+#   0x0000..0x9000    (368 KB)  bootloader (default)
+#   0x9000..0xf000    (24 KB)   nvs — credentials + camera settings
+#   0xf000..0x10000   (4 KB)    phy_init
+#   0x10000..0x190000 (1.5 MB)  factory app
+#
+# No OTA partition: the device ships without an OTA update
+# path today. Add an `ota_0` / `ota_1` pair here when OTA is
+# introduced; `factory` will need to shrink back to ~1 MB to
+# fit two app images plus their state.
+nvs,      data, nvs,     0x9000,  0x6000
+phy_init, data, phy,     0xf000,  0x1000
+factory,  app,  factory, 0x10000, 0x180000
