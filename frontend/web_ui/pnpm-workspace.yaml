@@ -1,8 +1,2 @@
-# pnpm 11 stores the "should this package run its install script"
-# decision in this file. We allow native-binary postinstalls for the
-# packages Vite / Qwik need at build and dev time. Glob patterns (/**)
-# are required so pnpm matches all resolved versions transitively.
-allowBuilds:
-  '**/esbuild': true           # Vite's native transform pipeline (multiple versions)
-  '**/@parcel/watcher': true  # Vite's native file watcher (HMR)
-  '**/sharp': true             # Qwik's image optimizer
+# pnpm workspace configuration.
+# Single-package workspace: no sub-packages.
