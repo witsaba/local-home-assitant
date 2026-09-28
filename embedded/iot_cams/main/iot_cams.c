@@ -1,22 +1,27 @@
 /* iot_cams.c — application entry point (app_main).
  *
- * Sole responsibility: bootstrap the WiFi provisioning package and
- * wait for credentials to land. Once credentials are committed to
- * NVS, the firmware waits for the station DHCP lease, logs the
- * assigned IP, shuts down the softAP, and enters the application
- * supervisor loop.
+ * Responsibilities:
+ *   - Bootstrap the WiFi provisioning package and wait for
+ *     credentials to land in NVS.
+ *   - Once credentials are committed, wait for the station DHCP
+ *     lease, log the assigned IP, shut down the softAP, and
+ *     enter the application supervisor loop.
+ *   - Bring up the OV2640 sensor (via cam_reader) before any
+ *     branch runs so GET /capture on the STA server always finds
+ *     a working sensor.
  *
  * On every boot (first provision or subsequent re-join) the same
  * wait-for-IP-and-log sequence runs. On a first boot the softAP
- * is torn down after DHCP; on subsequent boots the softAP is never
- * started because provisioning_run() is skipped entirely.
+ * is torn down after DHCP; on subsequent boots the softAP is
+ * never started because provisioning_run() is skipped entirely.
  *
  * Constraints enforced by this file:
- *   - It includes ONLY `provisioning.h`. No `esp_wifi.h`,
- *     `esp_netif.h`, `mdns.h` or `protocomm.h` shows up here
- *     — those are package-private. If you find yourself wanting
- *     to add such an include, it is a sign the package surface
- *     is too narrow and should be widened.
+ *   - It includes ONLY `provisioning.h` and `cam_reader.h`. No
+ *     `esp_wifi.h`, `esp_netif.h`, `mdns.h`, `protocomm.h` or
+ *     `esp_camera.h` shows up here — those are private to the
+ *     component that owns them. If you find yourself wanting to
+ *     add one of those includes, it is a sign that component's
+ *     public surface is too narrow and should be widened.
  */
 #include <stdio.h>
 #include <string.h>
@@ -28,6 +33,7 @@
 #include "esp_mac.h"
 
 #include "provisioning.h"
+#include "cam_reader.h"
 
 static const char *TAG = "app_main";
 static const char *FW_VERSION = "0.1.0";
@@ -135,6 +141,19 @@ void app_main(void)
     if (r != ESP_OK) {
         ESP_LOGE(TAG, "provisioning_init failed: %s", esp_err_to_name(r));
         return;
+    }
+
+    /* Bring up the OV2640 once at boot. After this call the
+     * cam_reader_capture() API is hot for the lifetime of the
+     * process; the GET /capture endpoint on the STA server
+     * exercises it. Failure here is non-fatal — we log and keep
+     * running so provisioning + /whoami still work; /capture
+     * will simply return 500 until the device is power-cycled. */
+    ESP_LOGI(TAG, "initializing camera reader...");
+    esp_err_t cam_r = cam_reader_init();
+    if (cam_r != ESP_OK) {
+        ESP_LOGE(TAG, "cam_reader_init failed: %s -- /capture will be unavailable",
+                 esp_err_to_name(cam_r));
     }
 
     ESP_LOGI(TAG, "device: %s fw=%s", info.name, info.fw_version);
