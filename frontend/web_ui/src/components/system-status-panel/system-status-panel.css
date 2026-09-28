@@ -1,0 +1,97 @@
+.system-status {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-5) var(--space-6);
+  box-shadow: var(--shadow-sm);
+}
+
+.system-status__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-4);
+  margin-bottom: var(--space-5);
+  /* More space above the heading than below it. */
+  padding-top: 0;
+}
+
+.system-status__heading {
+  font-size: var(--text-xl);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-tight);
+  color: var(--color-fg);
+  margin: 0;
+}
+
+.system-status__as-of {
+  font-size: var(--text-xs);
+  color: var(--color-fg-subtle);
+  margin: 0;
+}
+
+.system-status__list {
+  display: grid;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  grid-template-columns: 1fr;
+  border-top: 1px solid var(--color-border);
+}
+
+@media (min-width: 48rem) {
+  .system-status__list {
+    grid-template-columns: 1fr 1fr;
+    column-gap: var(--space-6);
+  }
+}
+
+.system-status__row {
+  display: grid;
+  grid-template-columns: minmax(7rem, auto) 1fr auto;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-4) 0;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.system-status__list > .system-status__row:nth-child(odd) {
+  /* keeps the 1fr | 1fr grid reading left-to-right per pair */
+}
+
+@media (min-width: 48rem) {
+  .system-status__row {
+    border-bottom: 1px solid var(--color-border);
+  }
+  .system-status__row:nth-last-child(-n + 2) {
+    border-bottom: 0;
+  }
+  .system-status__row:nth-last-child(2):nth-child(odd) {
+    border-bottom: 0;
+  }
+}
+
+.system-status__row:last-child {
+  border-bottom: 0;
+}
+
+.system-status__label {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  color: var(--color-fg-muted);
+  margin: 0;
+}
+
+.system-status__value {
+  font-size: var(--text-base);
+  font-weight: var(--weight-medium);
+  color: var(--color-fg);
+  font-variant-numeric: tabular-nums;
+  margin: 0;
+}
+
+.system-status__chip {
+  margin: 0;
+  display: flex;
+  align-items: center;
+}

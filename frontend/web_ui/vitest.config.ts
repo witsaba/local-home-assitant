@@ -11,12 +11,19 @@
  * defensive (jsdom is required by some transitive imports). We pick
  * jsdom — the documented default — for the closest possible match
  * to the official Qwik docs example.
+ *
+ * `vite-tsconfig-paths` makes the `~/*` alias declared in
+ * `tsconfig.json` resolve under the test runner, the same way it
+ * resolves in the dev and build pipelines. Without it, the
+ * optimizer step that splits each component$ into its own module
+ * loses the alias and tests fail at import-analysis time.
  */
 import { defineConfig } from "vitest/config";
 import { qwikVite } from "@builder.io/qwik/optimizer";
+import tsconfigPaths from "vite-tsconfig-paths";
 
 export default defineConfig({
-  plugins: [qwikVite()],
+  plugins: [qwikVite(), tsconfigPaths({ root: "." })],
   test: {
     environment: "jsdom",
     include: ["src/**/*.{spec,test}.{ts,tsx}"],
@@ -24,4 +31,3 @@ export default defineConfig({
     css: false,
   },
 });
-

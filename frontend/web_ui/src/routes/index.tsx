@@ -1,71 +1,146 @@
 import { component$, useStylesScoped$ } from "@builder.io/qwik";
 import type { DocumentHead } from "@builder.io/qwik-city";
 
-import { SkeletonCard } from "~/components/skeleton-card/skeleton-card";
+import { FeatureCard } from "~/components/feature-card/feature-card";
+import {
+  SystemStatusPanel,
+  type SystemStatusRow,
+} from "~/components/system-status-panel/system-status-panel";
+import { TopBar } from "~/components/top-bar/top-bar";
 import styles from "./index.css?inline";
 
 /**
- * Home page (skeleton).
+ * Home page (witsaba — local home assistant).
  *
- * Visual wireframe for the witsaba local-home-assistant UI. Each
- * SkeletonCard represents a future feature surface. Replace
- * placeholder copy and the card body per feature when those features
- * land — keep this file as the only top-level route until then.
+ * The page is composed of:
+ *   1. TopBar — brand, primary nav, system status chip
+ *   2. Hero — page title + one-line orientation. No eyebrow above it.
+ *   3. SystemStatusPanel — live state of postgres / messaging-core /
+ *      workers / devices
+ *   4. FeatureCard grid — Devices, Discovery, Logs, Settings, each
+ *      with its own real status
+ *   5. Footer — version + build commit
+ *
+ * THESIS (modernization): the page is a status board, not a story.
+ * OWN-WORLD: warm-neutral surfaces, signal-blue accent, system
+ * typography, generous spacing, real status chips. STORY: a calm
+ * "operate" surface for a self-hosting operator. FIRST VIEWPORT:
+ * top bar visible, hero "Stack overview" + the system status panel
+ * both above the fold on a 1024x768 desktop. FORM: Calm Operational
+ * (Operate mode), seed key witsaba/calm-operational. FINISH:
+ * unreviewed and undocumented is unfinished; this build ends with
+ * the finish review, the verdict, and DESIGN.md.
  */
 export default component$(() => {
   useStylesScoped$(styles);
 
-  return (
-    <div class="home">
-      <nav class="home__nav" aria-label="Primary">
-        <span class="home__brand">witsaba</span>
-        <div class="home__nav-links" aria-hidden="true">
-          <span>Devices</span>
-          <span>Discovery</span>
-          <span>Logs</span>
-          <span>Settings</span>
-        </div>
-      </nav>
+  // Live system rows. In v1 the back end is not yet wired into the
+  // page, so every value reads "—" and every status is
+  // "not_connected". When the API lands, replace these with the
+  // real query results — the layout and tokens stay.
+  const systemRows: SystemStatusRow[] = [
+    {
+      label: "Postgres",
+      value: "—",
+      status: "not_connected",
+      statusLabel: "Not connected",
+    },
+    {
+      label: "messaging-core",
+      value: "—",
+      status: "not_connected",
+      statusLabel: "Not connected",
+    },
+    {
+      label: "workers",
+      value: "—",
+      status: "not_connected",
+      statusLabel: "Not connected",
+    },
+    {
+      label: "Discovered devices",
+      value: "0",
+      status: "not_connected",
+      statusLabel: "No data yet",
+    },
+  ];
 
-      <main class="home__main">
-        <section class="home__hero">
-          <span class="home__hero-eyebrow">Local home assistant</span>
-          <h1 class="home__hero-title">Stack overview</h1>
-          <p class="home__hero-subtitle">
-            Front-end wireframe for the witsaba stack. The cards below are
-            placeholders — each one will host a dedicated feature once the
-            corresponding back-end service is wired in.
+  return (
+    <>
+      <TopBar
+        currentPath="/"
+        systemStatus="not_connected"
+        systemStatusLabel="Stack offline"
+      />
+
+      <main class="home" id="main">
+        <header class="home__hero">
+          <h1 class="home__title">Stack overview</h1>
+          <p class="home__lede">
+            Live status of the witsaba local-home-assistant stack. The
+            cards below are placeholders for the feature surfaces —
+            each one will host a dedicated view once the corresponding
+            back-end wiring lands.
           </p>
-        </section>
+        </header>
+
+        <SystemStatusPanel
+          heading="System"
+          asOf="not yet connected"
+          rows={systemRows}
+        />
 
         <section class="home__grid" aria-label="Feature surfaces">
-          <SkeletonCard
+          <FeatureCard
             title="Devices"
             description="Cameras, sensors, and actuators discovered on the LAN."
+            icon="◉"
+            status="not_connected"
+            statusLabel="Not connected"
+            href="/devices"
             actionLabel="Open"
           />
-          <SkeletonCard
+          <FeatureCard
             title="Discovery"
-            description="Live status of the workers discovery probes."
+            description="Live status of the workers LAN discovery probes."
+            icon="⌕"
+            status="not_connected"
+            statusLabel="Not connected"
+            href="/discovery"
             actionLabel="Open"
           />
-          <SkeletonCard
+          <FeatureCard
             title="Logs"
             description="Recent activity from workers, messaging-core, and the UI."
+            icon="≡"
+            status="not_connected"
+            statusLabel="Not connected"
+            href="/logs"
             actionLabel="Open"
           />
-          <SkeletonCard
+          <FeatureCard
             title="Settings"
             description="Stack configuration, secrets, and adapter selection."
+            icon="⚙"
+            status="not_connected"
+            statusLabel="Not connected"
+            href="/settings"
             actionLabel="Open"
           />
         </section>
       </main>
 
-      <footer class="home__footer">
-        witsaba local-home-assistant — UI scaffold
+      <footer class="home__footer" role="contentinfo">
+        <div class="home__footer-inner">
+          <span class="home__footer-text">
+            witsaba local-home-assistant
+          </span>
+          <span class="home__footer-meta">
+            v0.1.0-dev · <code>unset</code>
+          </span>
+        </div>
       </footer>
-    </div>
+    </>
   );
 });
 
@@ -75,7 +150,21 @@ export const head: DocumentHead = {
     {
       name: "description",
       content:
-        "Front-end for the witsaba local-home-assistant stack. Wireframe skeleton.",
+        "Live status of the witsaba local-home-assistant stack — Postgres, messaging-core, workers, and discovered devices.",
+    },
+    {
+      name: "color-scheme",
+      content: "light dark",
+    },
+    {
+      name: "theme-color",
+      content: "#f7f7f5",
+      media: "(prefers-color-scheme: light)",
+    },
+    {
+      name: "theme-color",
+      content: "#0e1014",
+      media: "(prefers-color-scheme: dark)",
     },
   ],
 };

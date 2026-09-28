@@ -1,0 +1,99 @@
+.status-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  border-radius: 999px;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  line-height: 1.4;
+  color: var(--color-fg);
+  white-space: nowrap;
+  transition:
+    background var(--motion-base) var(--ease-out),
+    border-color var(--motion-base) var(--ease-out);
+}
+
+.status-chip__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1em;
+  font-size: 0.875em;
+  line-height: 1;
+}
+
+.status-chip__label {
+  letter-spacing: 0;
+}
+
+.status-chip--healthy {
+  background: var(--color-success-soft);
+  border-color: color-mix(in srgb, var(--color-success) 30%, transparent);
+  color: var(--color-success);
+}
+
+.status-chip--healthy .status-chip__icon {
+  color: var(--color-success);
+}
+
+.status-chip--degraded {
+  background: var(--color-warning-soft);
+  border-color: color-mix(in srgb, var(--color-warning) 30%, transparent);
+  color: var(--color-warning);
+}
+
+.status-chip--degraded .status-chip__icon {
+  color: var(--color-warning);
+}
+
+.status-chip--unhealthy {
+  background: var(--color-error-soft);
+  border-color: color-mix(in srgb, var(--color-error) 30%, transparent);
+  color: var(--color-error);
+}
+
+.status-chip--unhealthy .status-chip__icon {
+  color: var(--color-error);
+}
+
+.status-chip--connecting {
+  color: var(--color-fg-muted);
+  background: var(--color-neutral-soft);
+  border-color: var(--color-border);
+}
+
+.status-chip--not_connected {
+  color: var(--color-fg-muted);
+  background: var(--color-surface);
+  border-color: var(--color-border);
+  border-style: dashed;
+}
+
+/* --- one authored moment: state change pulse -------------------------- */
+.status-chip--pulse .status-chip__icon {
+  animation: status-chip-pulse var(--motion-slow) var(--ease-out);
+}
+
+@keyframes status-chip-pulse {
+  0% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.45);
+    opacity: 0.6;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .status-chip--pulse .status-chip__icon {
+    animation: none;
+  }
+}
