@@ -111,6 +111,74 @@ uint32_t cam_stream_frames_dropped_get(void);
 #define CAM_STREAM_PERIOD_MS 100  /* 10 FPS default */
 #endif
 
+/* ---------- W3 — JSON text-frame payload schemas ----------
+ *
+ * The hello / status payloads are emitted as UTF-8 text WS
+ * frames. Field order in the rendered JSON is INVARIANT —
+ * downstream parsers (messaging-core, future web UI) MUST be
+ * able to rely on the shape (mirrors REQ-WS-002 / REQ-WS-006
+ * in the esp32-cam-surveillance reference).
+ *
+ * Capture-at-rest: every field in the structs is copied by
+ * the caller once into the snapshot that feeds the wire
+ * builders, so the builders themselves stay PURE — no IDF
+ * runtime calls inside cam_stream_wire.c. The status-frame
+ * timer (W5+) is responsible for repopulating the struct on
+ * every fire.
+ */
+
+/** Identity fields populated by the WS endpoint at handshake
+ *  accept time. Strings are NUL-terminated; empty name is
+ *  allowed (unprovisioned devices before the operator
+ *  configures a friendly name). */
+typedef struct {
+    char mac[13];    /* 12-hex eFuse MAC, lowercase, +NUL */
+    char name[33];   /* Kconfig default or NVS override +NUL */
+    char fw[16];     /* e.g. "0.1.0" +NUL */
+} cam_stream_identity_t;
+
+/** Status-telemetry snapshot. Populated by the WS handler
+ *  from `esp_timer_get_time` / `esp_wifi_sta_get_rssi` /
+ *  `esp_get_free_heap_size` / cam_reader's counters /
+ *  cam_stream's counters. PURE wire builders, so the
+ *  caller is the boundary to IDF. */
+typedef struct {
+    int64_t  uptime_us;
+    int32_t  rssi_dbm;
+    uint32_t free_heap;
+    uint32_t fb_drops;        /* cam_reader, producer-side */
+    uint32_t frames_sent;     /* cam_stream, consumer-side */
+    uint32_t frames_dropped;  /* cam_stream, consumer-side */
+    uint32_t fps_applied;     /* current effective FPS */
+} cam_stream_status_metrics_t;
+
+/** Render the hello frame into `out` (UTF-8, NUL-terminated
+ *  on success — the NUL is NOT counted in the returned size).
+ *
+ *  Schema (REQ-WS-002 shape):
+ *    {"type":"hello","mac":"<12-hex>","name":"<name>",
+ *     "fw":"<fw>","caps":["jpeg","stream","identify"]}
+ *
+ *  @return bytes written excluding NUL, or 0 on overflow /
+ *          invalid args (caller skips the send on the 0
+ *          sentinel). */
+size_t cam_stream_wire_build_hello(const cam_stream_identity_t *id,
+                                     char *out, size_t out_len);
+
+/** Render the status frame into `out`.
+ *
+ *  Schema (REQ-WS-006 shape):
+ *    {"type":"status","mac":"<12-hex>","name":"<name>",
+ *     "uptime_s":<int>,"rssi_dbm":<int>,"free_heap":<int>,
+ *     "fb_drops":<int>,"frames_sent":<int>,
+ *     "frames_dropped":<int>,"fps_applied":<int>}
+ *
+ *  @return bytes written excluding NUL, or 0 on overflow /
+ *          invalid args. */
+size_t cam_stream_wire_build_status(const cam_stream_status_metrics_t *m,
+                                     const cam_stream_identity_t *id,
+                                     char *out, size_t out_len);
+
 /** Host-test seam: one iteration of the consume→send→release
  *  cycle. Honors `cam_reader.h`'s release contract precisely
  *  (ESP_ERR_TIMEOUT → no release; ESP_FAIL → release(NULL);

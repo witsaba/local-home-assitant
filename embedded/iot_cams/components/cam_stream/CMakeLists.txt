@@ -31,6 +31,7 @@
 idf_component_register(
     SRCS "cam_stream.c"
          "cam_stream_sender.c"
+         "cam_stream_wire.c"
     INCLUDE_DIRS "include"
     PRIV_REQUIRES cam_reader esp_timer freertos
 )
