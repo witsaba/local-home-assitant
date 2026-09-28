@@ -30,6 +30,7 @@
 #                     hygiene pitfalls captured in engram 4331.
 idf_component_register(
     SRCS "cam_stream.c"
+         "cam_stream_sender.c"
     INCLUDE_DIRS "include"
     PRIV_REQUIRES cam_reader esp_timer freertos
 )

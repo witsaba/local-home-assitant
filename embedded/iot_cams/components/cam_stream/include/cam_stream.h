@@ -23,7 +23,7 @@
  *
  *     cam_stream_task_start() spawns the FreeRTOS task that
  *                              loops `cam_stream_loop_iteration`
- *                              forever.
+ *                              forever at CAM_STREAM_PERIOD_MS.
  *
  *     cam_stream_sink_install(sink)
  *                              Called by the /ws/cams endpoint
@@ -59,59 +59,64 @@ typedef struct {
 
 /** One-shot at boot from app_main, after cam_reader_init().
  *
- *  Installs the built-in disconnected sink stubs (any send
- *  fails with ESP_ERR_INVALID_STATE; `is_connected` returns
- *  false). Does NOT spawn the stream task yet — call
- *  cam_stream_task_start() after this returns ESP_OK.
- *
- *  Idempotent: a second call returns ESP_ERR_INVALID_STATE.
- *
  *  @return ESP_OK on success; ESP_ERR_INVALID_STATE on a
- *          second init call.
+ *          second call.
  */
 esp_err_t cam_stream_init(void);
 
-/** Spawn the FreeRTOS stream task. Idempotent on host stubs.
+/** Spawn the FreeRTOS stream task at the configured
+ *  CAM_STREAM_PERIOD_MS period.
  *
- *  @return ESP_OK on success (always in W1 stub; ESP_OK on
- *          FreeRTOS task spawn success in W2).
- */
+ *  @return ESP_OK on FreeRTOS task spawn success. */
 esp_err_t cam_stream_task_start(void);
 
-/** Install `sink` as the active sink. NULL (or any subsequent
- *  disconnect) reinstalls the built-in disconnected stubs.
- *  Pointer is copied by reference; the sink struct must
- *  outlive the stream task. */
+/** Install `sink` as the active sink. NULL reinstalls the
+ *  built-in disconnected stubs. */
 void cam_stream_sink_install(const cam_stream_sink_t *sink);
 
 /** True iff the installed sink reports a live viewer. */
 bool cam_stream_sink_connected(void);
 
+/** Internal seam accessor used by `cam_stream_sender.c`.
+ *  Not part of the public surface; documented here only so
+ *  the header is the single source of truth for the seam
+ *  type. Other TUs do not need to call this. */
+const cam_stream_sink_t *cam_stream_sink_get(void);
+
+/** Push one binary frame through the installed sink.
+ *  Currently a thin wrapper around `cam_stream_sink_get()`;
+ *  W5 wraps a TX mutex around it so multiple producers
+ *  (the stream task + future hello/status timers) cannot
+ *  interleave wire bytes. */
+esp_err_t cam_stream_sink_send_bin(const uint8_t *buf, size_t len);
+
+/** Push one text frame through the installed sink. W5
+ *  wraps a TX mutex around it. */
+esp_err_t cam_stream_sink_send_text(const char *buf, size_t len);
+
 /** Cross-task counters. Lock-free u32 reads on Xtensa LX6.
  *  Deliberately separate from cam_reader's fb_drops so the
  *  status frame can report producer (cam_reader) and consumer
  *  (cam_stream) drops independently — same separation as the
- *  reference's stream.h:38-43.
- *
- *  @return monotonic counter values. Reset to zero only at
- *          boot. */
+ *  reference's stream.h:38-43. */
 uint32_t cam_stream_frames_sent_get(void);
 uint32_t cam_stream_frames_dropped_get(void);
 
+/** Stream-task default period, derived from a build-time
+ *  constant until W8 wires CONFIG_FIRMWARE_STREAM_FPS_DEFAULT
+ *  through Kconfig. Surfaced as a macro so the loop task and
+ *  any external pacing logic (W3 hello+status timers) agree
+ *  on the same period without a runtime indirection. */
+#ifndef CAM_STREAM_PERIOD_MS
+#define CAM_STREAM_PERIOD_MS 100  /* 10 FPS default */
+#endif
+
 /** Host-test seam: one iteration of the consume→send→release
- *  cycle:
- *
- *    fb = cam_reader_capture()
- *    rc = cam_stream_sink_send_bin(fb->buf, fb->len)
- *    cam_reader_release(fb)        // ALWAYS (REQ-ST-005)
- *    if (rc < 0) s_frames_dropped++
- *    else        s_frames_sent++
- *
- *  The FreeRTOS wrapper (W2: cam_stream_task_entry) calls
- *  this inside an infinite for-loop. Returns true if a frame
- *  was consumed and accepted by the sink, false on timeout
- *  or sink failure.
- */
+ *  cycle. Honors `cam_reader.h`'s release contract precisely
+ *  (ESP_ERR_TIMEOUT → no release; ESP_FAIL → release(NULL);
+ *  ESP_OK → send/release/count). The FreeRTOS wrapper
+ *  (`cam_stream_task_entry`) calls this inside an infinite
+ *  for-loop paced at CAM_STREAM_PERIOD_MS via vTaskDelayUntil. */
 bool cam_stream_loop_iteration(void);
 
 #ifdef __cplusplus
