@@ -24,8 +24,8 @@
 ARG NODE_VERSION=22.13.0
 
 # ----------------------------------------------------------------------------
-# deps: install the full dev dep tree once. Reused by build and runtime stages
-# so the runtime stage can layer its own `--prod` install on top.
+# deps: install the full dependency tree once. Reused by build and
+# runtime stages as a starting point for each.
 # ----------------------------------------------------------------------------
 FROM node:${NODE_VERSION}-alpine AS deps
 WORKDIR /app
@@ -38,7 +38,7 @@ RUN npm install -g pnpm@11.8.0
 
 # Copy only manifests first so Docker can cache the install layer
 # independently of source changes.
-COPY package.json pnpm-lock.yaml ./
+COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
 RUN pnpm install
 
 # ----------------------------------------------------------------------------
@@ -54,8 +54,8 @@ COPY . .
 RUN pnpm run build
 
 # ----------------------------------------------------------------------------
-# runtime: minimal image. Re-installs deps in --prod mode to drop dev
-# tooling, then brings in the build artefacts.
+# runtime: minimal image. Re-installs deps and brings in the build
+# artefacts.
 # ----------------------------------------------------------------------------
 FROM node:${NODE_VERSION}-alpine AS runtime
 WORKDIR /app
@@ -72,15 +72,22 @@ RUN npm install -g pnpm@11.8.0
 # not ship it, and we want a small, deterministic install.
 RUN apk add --no-cache wget
 
-# Re-install without devDependencies. We can't --frozen-lockfile here
-# because the lockfile describes the full tree; --prod reads it
-# correctly and only pulls runtime deps.
-COPY package.json pnpm-lock.yaml ./
-RUN pnpm install --prod
+# Install the full dependency tree. We can't use --prod here because
+# every runtime dependency (vite, qwik, qwik-city, sharp, etc.) is
+# currently declared under devDependencies in package.json. Once the
+# project adopts a Node SSR adapter and moves runtime-only deps to
+# `dependencies`, switch this back to `pnpm install --prod` to slim
+# the image down.
+COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
+RUN pnpm install
 
 # Copy built artefacts and any source files needed at runtime.
+# Note: there is intentionally no `server/` copy. Qwik only emits a
+# server/ directory when an SSR adapter is installed via
+# `pnpm qwik add` (e.g. qwik-city-node), which this scaffold does not
+# have. The runtime CMD runs the Vite dev server against /app/src and
+# does not need a prebuilt server bundle.
 COPY --from=build /app/dist ./dist
-COPY --from=build /app/server ./server
 COPY --from=build /app/public ./public
 
 EXPOSE 5173

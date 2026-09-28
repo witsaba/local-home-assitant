@@ -7,13 +7,6 @@
   "engines-annotation": "Mostly required by sharp which needs a Node-API v9 compatible runtime",
   "private": true,
   "type": "module",
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "@parcel/watcher",
-      "esbuild",
-      "sharp"
-    ]
-  },
   "scripts": {
     "build": "qwik build",
     "build.client": "vite build",
