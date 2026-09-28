@@ -1,0 +1,32 @@
+## components/cam_stream/idf_component.yml
+##
+## Manifest for the iot_cams camera-stream component (FW-15/FW-16
+## style port from esp32-cam-surveillance, scoped down per the
+## /ws/cams endpoint plan in `odd/tasks/ws-cams-endpoint.md`).
+##
+## Long-lived FreeRTOS task that consumes JPEG frames from the
+## `cam_reader` sibling component and ships them to a WebSocket
+## viewer through a `cam_stream_sink_t` function-pointer seam
+## installed by the provisioning component at /ws/cams handshake
+## accept.
+##
+## VENDORING: today this directory is path-referenced from
+## `embedded/iot_cams/main/idf_component.yml` via `path:`. To
+## lift it to a separately versioned upstream component, move
+## the contents to a new repo, register the URL here, and swap
+## the consumer's `path:` for the URL. No code changes needed.
+##
+## W1 SCOPE: component skeleton only (file shape, public API,
+## disconnected-stub default sink). No FreeRTOS task is spawned
+## yet — that lands in W2. No JSON builders yet (W3). The sink
+## seam is plumbed in W5.
+version: 0.1.0
+description: Camera stream consumer for iot_cams ESP-IDF firmware. Long-lived FreeRTOS task that pulls JPEG frames from cam_reader and ships them to the WS sink seam installed by the /ws/cams endpoint.
+url: https://example.invalid/iot_cams/cam_stream
+
+## No managed-component deps in this branch (W1..W8).
+## `cam_reader` is path-referenced from `main/idf_component.yml`
+## alongside this component; no extra registry dep needed.
+## The cJSON managed dep for the {"cmd":"stream"} text-frame
+## control plane lands in a follow-up branch — see the
+## Out-of-scope section of `odd/tasks/ws-cams-endpoint.md`.

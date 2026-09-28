@@ -81,6 +81,18 @@ esp_err_t cam_reader_capture(camera_fb_t **fb);
  */
 void cam_reader_release(camera_fb_t *fb);
 
+/** Producer-side counters. Lock-free u32 reads on Xtensa LX6.
+ *  Bumped once per `cam_reader_capture` outcome:
+ *    - `frames_captured` — successful `esp_camera_fb_get`.
+ *    - `fb_drops`        — `esp_camera_fb_get` returned NULL
+ *                          (after the mutex was taken); the
+ *                          mutex has been released automatically.
+ *  Called by the cam_stream status-frame builder in W5+.
+ *
+ *  @return monotonic counter values. Reset to zero only at boot. */
+uint32_t cam_reader_frames_captured_get(void);
+uint32_t cam_reader_fb_drops_get(void);
+
 #ifdef __cplusplus
 }
 #endif

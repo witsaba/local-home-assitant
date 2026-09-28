@@ -58,4 +58,62 @@ menu "WiFi Provisioning"
             provisioning phone-app flow. Trivial cosmetic; the
             control plane treats it as opaque.
 
+    # === /ws/cams — WebSocket stream endpoint (W8) ===
+    #
+    # Five knobs land together so a single menuconfig session
+    # resolves the whole endpoint. Each knob is mirrored in
+    # sdkconfig.defaults with the same default.
+
+    config FIRMWARE_STREAM_FPS_DEFAULT
+        int "Default stream frame rate (FPS)"
+        range 1 60
+        default 10
+        help
+            Steady-state FPS the cam_stream FreeRTOS task paces
+            at. 10 fps @ SVGA q12 ≈ 280 KB/s per camera. The
+            upper bound is the XCLK limit on the OV2640 (25 fps
+            at VGA). The lower bound is 1 fps so an operator
+            can drop the stream rate dramatically when PSRAM
+            is tight.
+
+    config FIRMWARE_STREAM_FPS_MIN
+        int "Clamp floor for `{\"cmd\":\"stream\",\"fps\":N}`"
+        range 1 30
+        default 1
+        help
+            Reserved for the {"cmd":"stream"} text-frame
+            control plane (follow-up branch). Out-of-range
+            values clamp silently to [MIN..MAX].
+
+    config FIRMWARE_STREAM_FPS_MAX
+        int "Clamp ceiling for `{\"cmd\":\"stream\",\"fps\":N}`"
+        range 1 60
+        default 25
+        help
+            Reserved for the {"cmd":"stream"} text-frame
+            control plane (follow-up branch). The ceiling
+            guards against accidental floods from a buggy
+            operator UI.
+
+    config FIRMWARE_WS_PATH
+        string "WS endpoint path on the STA httpd"
+        default "/ws/cams"
+        help
+            Path the provisioning component registers for the
+            /ws/cams WebSocket endpoint. Must be a literal
+            constant per the pre-W3 esp32-cam-surveillance
+            reference ('no MAC substring' invariant); mirrors
+            REQ-WS-001.
+
+    config FIRMWARE_WS_STATUS_PERIOD_MS
+        int "Periodic status frame period (ms)"
+        range 1000 300000
+        default 30000
+        help
+            The status frame fires every N milliseconds while
+            a /ws/cams viewer session is active. Disarmed
+            when the viewer socket closes. Default 30 s per
+            the esp32-cam-surveillance reference and PRD
+            FR-6.
+
 endmenu

@@ -16,12 +16,13 @@
  * never started because provisioning_run() is skipped entirely.
  *
  * Constraints enforced by this file:
- *   - It includes ONLY `provisioning.h` and `cam_reader.h`. No
- *     `esp_wifi.h`, `esp_netif.h`, `mdns.h`, `protocomm.h` or
- *     `esp_camera.h` shows up here — those are private to the
- *     component that owns them. If you find yourself wanting to
- *     add one of those includes, it is a sign that component's
- *     public surface is too narrow and should be widened.
+ *   - It includes ONLY `provisioning.h`, `cam_reader.h`, and
+ *     `cam_stream.h`. No `esp_wifi.h`, `esp_netif.h`, `mdns.h`,
+ *     `protocomm.h` or `esp_camera.h` shows up here — those
+ *     are private to the component that owns them. If you find
+ *     yourself wanting to add one of those includes, it is a
+ *     sign that component's public surface is too narrow and
+ *     should be widened.
  */
 #include <stdio.h>
 #include <string.h>
@@ -34,6 +35,7 @@
 
 #include "provisioning.h"
 #include "cam_reader.h"
+#include "cam_stream.h"
 
 static const char *TAG = "app_main";
 static const char *FW_VERSION = "0.1.0";
@@ -154,6 +156,25 @@ void app_main(void)
     if (cam_r != ESP_OK) {
         ESP_LOGE(TAG, "cam_reader_init failed: %s -- /capture will be unavailable",
                  esp_err_to_name(cam_r));
+    }
+
+    /* W2 (feat/iot-cams-ws-cams-endpoint) — long-lived stream
+     * consumer task. Pulls JPEGs from cam_reader at
+     * CAM_STREAM_PERIOD_MS and ships them to the WS viewer sink
+     * installed by /ws/cams handshake accept (W4/W5). Independent
+     * from /capture: the cam_reader mutex serializes them so
+     * /capture is starved (5 s timeout → 503) while WS streams. */
+    ESP_LOGI(TAG, "initializing camera stream...");
+    esp_err_t cs_r = cam_stream_init();
+    if (cs_r != ESP_OK) {
+        ESP_LOGE(TAG, "cam_stream_init failed: %s -- /ws/cams will be unavailable",
+                 esp_err_to_name(cs_r));
+    } else {
+        esp_err_t cs_t = cam_stream_task_start();
+        if (cs_t != ESP_OK) {
+            ESP_LOGE(TAG, "cam_stream_task_start failed: %s",
+                     esp_err_to_name(cs_t));
+        }
     }
 
     ESP_LOGI(TAG, "device: %s fw=%s", info.name, info.fw_version);

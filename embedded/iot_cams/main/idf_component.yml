@@ -23,3 +23,9 @@ dependencies:
     path: ../components/provisioning
   cam_reader:
     path: ../components/cam_reader
+  cam_stream:
+    ## W1 (feat/iot-cams-ws-cams-endpoint) — long-lived WebSocket
+    ## stream consumer. Mirrors the path-dep shape of cam_reader;
+    ## lift to a separately versioned upstream component by swapping
+    ## the `path:` for a registry URL. See odd/tasks/ws-cams-endpoint.md.
+    path: ../components/cam_stream

@@ -24,7 +24,8 @@ idf_component_register(
     SRCS "src/provisioning.c"
          "src/captive_portal.c"
          "src/sta_server.c"
+         "src/ws_cams.c"
          "src/wifi_cred.c"
     INCLUDE_DIRS "include"
-    REQUIRES esp_wifi esp_netif esp_event nvs_flash mdns esp_http_server json cam_reader
+    REQUIRES esp_wifi esp_netif esp_event nvs_flash mdns esp_http_server json cam_reader cam_stream
 )

@@ -75,6 +75,20 @@ static const char *TAG = "cam-reader";
  * given once to mark the unlocked state. NULL until init. */
 static SemaphoreHandle_t s_cam_mutex = NULL;
 
+/* Producer-side counters. Lock-free u32 reads on Xtensa LX6. */
+static volatile uint32_t s_frames_captured = 0;
+static volatile uint32_t s_fb_drops        = 0;
+
+uint32_t cam_reader_frames_captured_get(void)
+{
+    return s_frames_captured;
+}
+
+uint32_t cam_reader_fb_drops_get(void)
+{
+    return s_fb_drops;
+}
+
 esp_err_t cam_reader_init(void)
 {
     if (s_cam_mutex != NULL) {
@@ -196,9 +210,11 @@ esp_err_t cam_reader_capture(camera_fb_t **fb)
         ESP_LOGE(TAG, "capture: esp_camera_fb_get failed");
         /* The mutex has been taken; the caller MUST call
          * cam_reader_release(NULL) to drop it. */
+        s_fb_drops++;
         return ESP_FAIL;
     }
 
+    s_frames_captured++;
     ESP_LOGD(TAG, "capture: %zu bytes in %llu ms",
              out->len, (unsigned long long)elapsed_ms);
 
