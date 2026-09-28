@@ -358,21 +358,20 @@ These subjects are reserved but not implemented in this branch.
 | `PG_MAX_CONN_LIFETIME` | `1h` | Pool max connection lifetime |
 | `PG_MAX_CONN_IDLE_TIME` | `30m` | Pool max idle time |
 
-## Commit Log (in-progress)
+## Commit Log
 
 | Task | Commit | Status |
 |------|--------|--------|
-| W0 | docs(odd): messaging-core streaming gateway plan | ✅ |
-| T1 | feat(messaging-core): extend config with PG_* + STREAM_PORT | 🔄 |
-| T2 | feat(messaging-core): add pgx/v5 singleton db pool | ⬜ |
-| T3 | feat(messaging-core): add device repository (SELECT by MAC) | ⬜ |
-| T4 | feat(messaging-core): add WS client for chip /ws/cams connection | ⬜ |
-| T5 | feat(messaging-core): add Gin WS server at /stream/:mac | ⬜ |
-| T6 | feat(messaging-core): add camera hub with viewer registry + fan-out | ⬜ |
-| T7 | feat(messaging-core): wire streaming gateway into composition root | ⬜ |
-| T8 | chore(compose): add STREAM_PORT=8080 to messaging-core | ⬜ |
-| T9 | test(messaging-core): add unit tests for all new components | ⬜ |
-| T10 | docs(messaging-core): update README with streaming gateway | ⬜ |
+| T1 | `6da67b5` feat(messaging-core): extend config with PG_* + STREAM_PORT | ✅ |
+| T2 | `db8a683` feat(messaging-core): add pgx/v5 singleton db pool | ✅ |
+| T3 | `b08e0b8` feat(messaging-core): add device repository (SELECT by MAC) | ✅ |
+| T4 | `5da5d44` feat(messaging-core): add WS client for chip /ws/cams connection | ✅ |
+| T5 | `b9f0509` feat(messaging-core): add Gin WS server at /stream/:mac | ✅ |
+| T6 | `03187ed` feat(messaging-core): add camera hub with viewer registry + fan-out | ✅ |
+| T7 | `d99f93f` feat(messaging-core): wire streaming gateway into composition root | ✅ |
+| T8 | `821d6db` chore(compose): add STREAM_PORT=8080 and PG_* to messaging-core | ✅ |
+| T9 | (tests alongside each component) | ✅ |
+| T10 | `a81478f` docs(messaging-core): update README with streaming gateway | ✅ |
 
 ## Tracking
 
