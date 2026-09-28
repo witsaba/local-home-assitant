@@ -27,7 +27,8 @@ The binary logs structured JSON to stdout. A clean run looks like:
 {"level":"info","msg":"messaging-core starting","version":"0.1.0-dev","nats_host":"127.0.0.1","nats_port":4222,"stream_port":8080,"log_level":"info"}
 {"level":"info","msg":"NATS server listening","url":"nats://127.0.0.1:4222","name":"messaging-core"}
 {"level":"info","msg":"Postgres pool connected","pg_host":"127.0.0.1","pg_port":5432}
-{"level":"info","msg":"messaging-core fully started","nats":"127.0.0.1:4222","stream":":8080"}
+{"level":"info","msg":"API server started","addr":":8081"}
+{"level":"info","msg":"messaging-core fully started","nats":"127.0.0.1:4222","stream":":8080","api":":8081"}
 ```
 
 Stop with `Ctrl-C` / `SIGTERM`. Shutdown drains within 10s and exits 0.
@@ -43,6 +44,7 @@ All configuration comes from environment variables. Defaults make the service ru
 | `NATS_HOST` | `127.0.0.1` | NATS bind address. **Dev only.** |
 | `NATS_PORT` | `4222` | NATS port. 0–65535. |
 | `STREAM_PORT` | `8080` | **HTTP/WS port** for the camera streaming gateway. |
+| `API_PORT` | `8081` | HTTP REST API port for device list endpoints. Must differ from `STREAM_PORT`. |
 | `LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error`. |
 | `NATS_DATA_DIR` | *(empty)* | Reserved for JetStream follow-up. |
 | `MESSAGING_CORE_PG_HOST` | `127.0.0.1` | Postgres host (all containers use host network, reach postgres at 127.0.0.1). |
@@ -56,6 +58,37 @@ All configuration comes from environment variables. Defaults make the service ru
 | `MESSAGING_CORE_PG_MAX_CONN_IDLE_TIME` | `30m` | Pool max idle time. |
 
 Invalid values (non-numeric port, missing MESSAGING_CORE_PG_PASSWORD, unknown log level) cause the process to exit with code `2`.
+
+---
+
+## REST API — Active Devices
+
+### `GET /api/devices/active`
+
+Returns all devices from `witsaba.devices` whose `last_seen_at` is within the last **60 seconds**.
+
+```bash
+curl http://127.0.0.1:8081/api/devices/active
+```
+
+**Response** — `200 OK`, `Content-Type: application/json`:
+
+```json
+[
+  {
+    "mac": "e08cfe3091b0",
+    "name": "kitchen-cam",
+    "fw": "0.1.0",
+    "chip": "esp32cam",
+    "last_source_ip": "192.168.1.100",
+    "last_seen_at": "2026-09-28T14:30:00Z"
+  }
+]
+```
+
+Returns `[]` (empty array) when no devices have been seen in the last minute. Returns `500` on database error.
+
+The `pg_messaging_core` Postgres role (SELECT only) is used; no write access is required.
 
 ---
 
@@ -114,7 +147,8 @@ cmd/messaging-core/main.go           ← composition root
         ├── logger/                 ← zap + otelzap bridge
         ├── natsserver/            ← embedded NATS server lifecycle
         ├── db/                     ← pgx/v5 singleton pool
-        ├── devices/               ← device repository (SELECT by MAC)
+        ├── devices/               ← device repository (SELECT by MAC, ListActive)
+        ├── api/                   ← REST API server (GET /api/devices/active)
         ├── wsclient/              ← chip WS client (gorilla/websocket)
         ├── wsserver/             ← Gin HTTP/WS server (/stream/:mac)
         └── streamhub/             ← per-MAC viewer registry + fan-out
@@ -151,7 +185,8 @@ go test ./internal/infrastructure/natsserver/... -v -run ReceivesPublished
 | `internal/application/ports/logger.go` | `Logger` interface + `Field` struct. |
 | `internal/infrastructure/config/config.go` | Env-var loader (NATS + PG + STREAM_PORT). |
 | `internal/infrastructure/db/pool.go` | pgx/v5 singleton pool. |
-| `internal/infrastructure/devices/` | Device repository (SELECT by MAC from `witsaba.devices`). |
+| `internal/infrastructure/devices/` | Device repository (SELECT by MAC, ListActive from `witsaba.devices`). |
+| `internal/infrastructure/api/` | REST API server (`GET /api/devices/active`). |
 | `internal/infrastructure/wsclient/` | Chip WS client (gorilla/websocket → chip `/ws/cams`). |
 | `internal/infrastructure/wsserver/` | Gin HTTP/WS server at `/stream/:mac`. |
 | `internal/infrastructure/streamhub/` | Per-MAC viewer registry, lazy chip connect, fan-out. |
