@@ -45,7 +45,7 @@ All configuration comes from environment variables. Defaults make the service ru
 | `STREAM_PORT` | `8080` | **HTTP/WS port** for the camera streaming gateway. |
 | `LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error`. |
 | `NATS_DATA_DIR` | *(empty)* | Reserved for JetStream follow-up. |
-| `MESSAGING_CORE_PG_HOST` | `127.0.0.1` | Postgres host. |
+| `MESSAGING_CORE_PG_HOST` | `127.0.0.1` | Postgres host (`postgres` in Docker via bridge network). |
 | `MESSAGING_CORE_PG_PORT` | `5432` | Postgres port. |
 | `MESSAGING_CORE_PG_DATABASE` | `witsaba` | Database name. |
 | `MESSAGING_CORE_PG_USER` | `pg-messaging-core` | Postgres role (SELECT on `witsaba.devices`). |
