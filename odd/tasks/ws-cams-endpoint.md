@@ -225,7 +225,7 @@ the reference).
 
 ## Acceptance criteria
 
-1. `idf.py build` exits 0 with no new warnings. ✅ verified at W1, W2, W4, W8.
+1. `idf.py build` exits 0 with no new warnings. ✅ verified at W1..W9.
 2. `websocat ws://<device-ip>/ws/cams` performs the 101 upgrade, receives the JSON `hello` text frame, then BINARY JPEG frames at ≥ 10 Hz. Each frame decodes cleanly via `file`/image viewer; consecutive MD5 hashes are distinct. ✅ operator-flash.
 3. `frames_sent` counter in the JSON `status` frame increments by ~10 per second of open session. ✅ operator-monitor.
 4. Single-viewer: a second `websocat` while the first holds the stream receives `viewer_limit` text frame and the socket is closed; the first session is untouched. `/whoami` and `/capture` keep responding throughout. ✅ operator-flash.
@@ -236,6 +236,50 @@ the reference).
 9. Partition budget: factory partition ≥ 25 % free after WS adds ~10–15 KB. ✅ `idf.py size-components` evidence captured to PR description at W9.
 10. TX mutex invariant: the JSON `status` timer fires while binary frames are streaming; both reach the wire as distinct WS messages (no interleaved bytes). ✅ operator-monitor reading.
 11. Reconnect on viewer-close: when messaging-core drops (e.g. its own restart), the chip frees the slot within ≤ 1 frame period. The next handshake completes without reboot. ✅ operator-flash with `kill -9` on messaging-core.
+
+## Build evidence (post-W9, manual gate)
+
+```
+$ rm -rf build dependencies.lock && idf.py reconfigure
+... (4.1 s)
+$ idf.py build
+iot_cams.bin binary size 0xff0d0 bytes.
+  Smallest app partition is 0x180000 bytes.
+  0x80f30 bytes (34%) free.
+
+Component sizes (idf.py size-components):
+  libprovisioning.a   10514 B   (+ 1657 B over capture-endpoint)
+  libcam_stream.a       991 B   (new component)
+  libcam_reader.a       663 B   (+ 46 B for the augmented
+                                  fb_drops / frames_captured
+                                  counters)
+  libmain.a            1174 B   (+108 B for cam_stream_init /
+                                  cam_stream_task_start calls)
+  libhttp_parser.a  ...     B
+  libesp_http_server 13664 B  (was smaller pre-feature;
+                              + CONFIG_HTTPD_WS_SUPPORT=y
+                              pulls in the WS protocol stack)
+
+Delta vs post-/capture baseline 0xfc2e0: +0x2df0 bytes (~11.7 KB)
+  for the entire /ws/cams endpoint + the WS protocol stack.
+Factory partition headroom: 34% free, well above the 25% floor.
+```
+
+## Commit log (8 work-unit commits, no squash yet)
+
+```
+ec81dac feat(iot-cams): sdkconfig knobs for ws-cams endpoint      (W8)
+ef80f04 fix(wifi): re-attach /ws/cams on sta reconnect; clear    (W7)
+9338201 feat(cam-stream): single-viewer policy with viewer_limit   (W6)
+83a7e02 feat(cam-stream): bind ws sink seam to stream task ...    (W5)
+6f3b484 feat(cam-stream): json text-frame builders (hello+status) (W3)
+fccb522 feat(cam-stream): capture-send-release loop + stream task (W2)
+b6bbd85 feat(cam-stream): port cam_stream component skeleton      (W1)
+fa4b87e docs(odd): ws-cams-endpoint task plan                       (W0)
+```
+
+Final squash to a single commit will land when the operator
+flashes the fleet and approves the PR.
 
 ## Tracking
 
