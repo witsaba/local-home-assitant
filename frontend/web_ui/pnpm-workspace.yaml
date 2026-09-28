@@ -1,0 +1,8 @@
+# pnpm 11 stores the "should this package run its install script"
+# decision in this file. We allow native-binary postinstalls for the
+# three packages Vite / Qwik need at build and dev time. Any other
+# package that wants to run scripts must be added here explicitly.
+allowBuilds:
+  esbuild: true           # Vite's native transform pipeline
+  '@parcel/watcher': true # Vite's native file watcher (HMR)
+  sharp: true             # Qwik's image optimizer

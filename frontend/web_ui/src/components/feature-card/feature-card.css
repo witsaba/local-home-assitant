@@ -1,0 +1,106 @@
+.feature-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-5) var(--space-6) var(--space-5);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+  transition:
+    border-color var(--motion-base) var(--ease-out),
+    box-shadow var(--motion-base) var(--ease-out),
+    background var(--motion-base) var(--ease-out);
+  min-height: 12rem;
+}
+
+.feature-card:hover {
+  border-color: var(--color-border-strong);
+  box-shadow: var(--shadow-md);
+}
+
+.feature-card__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-1);
+}
+
+.feature-card__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: var(--radius-md);
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+  font-size: var(--text-md);
+  line-height: 1;
+  font-weight: var(--weight-semibold);
+}
+
+.feature-card__title {
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-tight);
+  color: var(--color-fg);
+  margin: 0;
+}
+
+.feature-card__description {
+  font-size: var(--text-base);
+  line-height: var(--leading-normal);
+  color: var(--color-fg-muted);
+  margin: 0;
+  flex: 1;
+}
+
+.feature-card__action {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  align-self: flex-start;
+  margin-top: var(--space-2);
+  padding: 0;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  color: var(--color-accent);
+  text-decoration: none;
+  text-underline-offset: 0.18em;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--color-accent) 40%, transparent);
+  text-decoration-thickness: 1px;
+  border-radius: var(--radius-sm);
+  transition:
+    color var(--motion-fast) var(--ease-out),
+    text-decoration-color var(--motion-fast) var(--ease-out),
+    gap var(--motion-fast) var(--ease-out);
+}
+
+.feature-card__action:hover {
+  color: var(--color-accent-hover);
+  text-decoration-color: var(--color-accent-hover);
+  gap: var(--space-3);
+}
+
+.feature-card__arrow {
+  display: inline-block;
+  transition: transform var(--motion-fast) var(--ease-out);
+}
+
+.feature-card__action:hover .feature-card__arrow {
+  transform: translateX(2px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .feature-card,
+  .feature-card__action,
+  .feature-card__arrow {
+    transition: none;
+  }
+  .feature-card__action:hover .feature-card__arrow {
+    transform: none;
+  }
+}
