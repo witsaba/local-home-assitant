@@ -43,9 +43,11 @@
 #include <stddef.h>
 #include <string.h>
 
+#include "esp_event.h"
 #include "esp_log.h"
 #include "esp_http_server.h"
 #include "esp_mac.h"
+#include "esp_wifi.h"
 
 #include "cam_stream.h"
 
@@ -384,9 +386,9 @@ bool ws_cams_is_uri_registered(void)
     return s_uri_registered;
 }
 
-/* W7 hook — placeholder; populated by the next work-unit.
- * Called by provisioning/src/ws_cams.c::ws_cams_on_sta_disconnected()
- * after the wifi-event subscriber fires.
+/* W7 hook — populated by W7.
+ * Called by provisioning/src/ws_cams.c's WIFI_EVENT_STA_DISCONNECTED
+ * subscriber after the wifi event fires.
  *
  * Today the auto-clear path is the async-send failure in
  * server_sink_send_bin / _text; this function only exists so
@@ -394,12 +396,79 @@ bool ws_cams_is_uri_registered(void)
  * link falls off. It is safe to call multiple times. */
 void ws_cams_on_sta_disconnected(void)
 {
-    if (s_viewer_fd >= 0) {
+    if (s_viewer_fd >= 0 || s_uri_registered) {
         int fd = s_viewer_fd;
-        s_viewer_fd = -1;
+        s_viewer_fd     = -1;
+        s_uri_registered = false;
         cam_stream_sink_install(NULL);
         ESP_LOGI(TAG,
-                 "STA disconnected: cleared viewer slot fd=%d",
+                 "STA disconnected: cleared viewer slot fd=%d, "
+                 "URI re-register on next IP-up",
                  fd);
     }
+}
+
+/* ---------- W7 — WiFi lifecycle subscribers ---------- */
+
+/* IP_EVENT_STA_GOT_IP handler. The first IP-up after
+ * provisioning_start_sta_server also gets the URI registered
+ * (idempotent if the same handle is reused). On every
+ * subsequent IP-up after a transient STA disconnect the
+ * URI is registered on the live handle again, defensively
+ * (iot_cams's httpd is long-lived today, but the pattern
+ * matches the reference's documented fix for the same
+ * class of bug). */
+static void ws_cams_on_got_ip(void *arg, esp_event_base_t event_base,
+                              int32_t event_id, void *event_data)
+{
+    (void)arg;
+    (void)event_base;
+    (void)event_id;
+    (void)event_data;
+
+    /* In iot_cams, the httpd outlives the STA netif: once
+     * provisioning_start_sta_server() succeeded, the same
+     * handle is re-used across every reconnect. Subscribing
+     * to IP_EVENT_STA_GOT_IP is defensive — it covers the
+     * case where the STA httpd is later moved to a softAP-
+     * listener pattern (mirrors the reference) or killed by
+     * a future provisioning flow. */
+    ESP_LOGI(TAG, "IP_EVENT_STA_GOT_IP fired; /ws/cams registration "
+                  "remains live on the long-lived httpd");
+    (void)ws_cams_register_uri(s_httpd);
+}
+
+/* WIFI_EVENT_STA_DISCONNECTED handler — proper 4-arg
+ * signature so esp_event_handler_register stores it
+ * directly without a cast. The handler delegates to the
+ * same ws_cams_on_sta_disconnected() that `sta_got_ip`
+ * uses. */
+static void ws_cams_on_sta_disconnected_event(
+    void *arg, esp_event_base_t event_base,
+    int32_t event_id, void *event_data)
+{
+    (void)arg;
+    (void)event_base;
+    (void)event_id;
+    (void)event_data;
+    ws_cams_on_sta_disconnected();
+}
+
+/* Subscribe to IP_EVENT_STA_GOT_IP and WIFI_EVENT_STA_DISCONNECTED.
+ * Idempotent — safe to call once from provisioning_start_sta_server
+ * after the httpd handle is live.
+ *
+ * The WIFI_EVENT_STA_DISCONNECTED subscriber clears the viewer
+ * slot + sink so a vanished viewer can't deadlock the slot. The
+ * IP_EVENT_STA_GOT_IP subscriber logs only (and defensively
+ * re-registers the URI). */
+esp_err_t ws_cams_install(void)
+{
+    esp_err_t r = esp_event_handler_register(
+        IP_EVENT, IP_EVENT_STA_GOT_IP,
+        ws_cams_on_got_ip, NULL);
+    if (r != ESP_OK) return r;
+    return esp_event_handler_register(
+        WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED,
+        ws_cams_on_sta_disconnected_event, NULL);
 }

@@ -275,9 +275,23 @@ esp_err_t sta_server_start(void)
         return err;
     }
 
+    /* W7 — subscribe to IP_EVENT_STA_GOT_IP and
+     * WIFI_EVENT_STA_DISCONNECTED so the /ws/cams URI
+     * survives transient WiFi blips (the got-IP subscriber
+     * is defensive today; the disconnected subscriber
+     * clears the viewer slot so a vanished viewer can't
+     * deadlock the slot across the reconnect). */
+    err = ws_cams_install();
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(TAG, "ws_cams_install failed: %s — reconnects "
+                      "may not clear the viewer slot cleanly",
+                 esp_err_to_name(err));
+    }
+
     ESP_LOGI(TAG,
              "STA server running on port 80 "
-             "(/whoami, /capture, /ws/cams registered)");
+             "(/whoami, /capture, /ws/cams registered; "
+             "wifi lifecycle subscribers live)");
     return ESP_OK;
 }
 

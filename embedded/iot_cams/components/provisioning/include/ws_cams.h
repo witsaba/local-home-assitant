@@ -44,6 +44,13 @@ bool ws_cams_is_uri_registered(void);
  * IP_EVENT_STA_GOT_IP re-attach starts from a clean slate. */
 void ws_cams_on_sta_disconnected(void);
 
+/* W7 install — subscribe to IP_EVENT_STA_GOT_IP and
+ * WIFI_EVENT_STA_DISCONNECTED on the default event loop.
+ * Idempotent. Called once from sta_server_start after the
+ * httpd handle is live. ESP_ERR_INVALID_STATE on a second
+ * call (already subscribed). */
+esp_err_t ws_cams_install(void);
+
 #ifdef __cplusplus
 }
 #endif
