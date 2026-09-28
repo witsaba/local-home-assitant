@@ -192,12 +192,80 @@ static size_t build_hello(char *out, size_t out_len)
 
 /* ---------- handshake ---------- */
 
+/* Reject body for a second concurrent viewer. Kept tiny and
+ * greppable; the server closes the second-handshake socket
+ * right after dispatching this frame. */
+static const char VIEWER_LIMIT_JSON[] =
+    "{\"type\":\"error\",\"reason\":\"viewer_limit\"}";
+
+/* W6 — single-viewer enforcement. If a different viewer slot
+ * is already taken, reject the new handshake with a short
+ * text error frame and ESP_FAIL (the httpd closes THAT
+ * socket). The active viewer's session is untouched. */
+static esp_err_t viewer_reject(int new_fd)
+{
+    ESP_LOGW(TAG,
+             "second WS handshake fd=%d rejected "
+             "(single-viewer policy; active fd=%d)",
+             new_fd, s_viewer_fd);
+    httpd_ws_frame_t pkt = {
+        .final   = true,
+        .type    = HTTPD_WS_TYPE_TEXT,
+        .payload = (uint8_t *)VIEWER_LIMIT_JSON,
+        .len     = sizeof(VIEWER_LIMIT_JSON) - 1,
+    };
+    (void)httpd_ws_send_frame_async(s_httpd, new_fd, &pkt);
+    return ESP_FAIL;
+}
+
+/* Decide whether the handshake is a single-viewer reject or a
+ * proceed-to-accept. Returns ESP_OK to proceed, ESP_FAIL to
+ * reject (and close the new socket). */
+static esp_err_t ws_cams_check_single_viewer(httpd_req_t *req,
+                                              int new_fd)
+{
+    /* No active viewer slot? Accept. */
+    if (s_viewer_fd < 0 || s_httpd == NULL) {
+        return ESP_OK;
+    }
+
+    /* Active slot's fd is dead (e.g. previous client crashed
+     * without a graceful close). Treat the slot as free so
+     * the new handshake can win it. */
+    if (httpd_ws_get_fd_info(s_httpd, s_viewer_fd) !=
+            HTTPD_WS_CLIENT_WEBSOCKET) {
+        ESP_LOGW(TAG,
+                 "active viewer slot fd=%d is dead — recycling "
+                 "for the new handshake",
+                 s_viewer_fd);
+        cam_stream_sink_install(NULL);
+        s_viewer_fd = -1;
+        return ESP_OK;
+    }
+
+    /* Same fd reconnecting (httpd may re-handshake the same
+     * socket) — accept; not a second viewer. */
+    if (new_fd == s_viewer_fd) {
+        return ESP_OK;
+    }
+
+    /* Active viewer is alive on a different fd — reject. */
+    return viewer_reject(new_fd);
+}
+
 static esp_err_t viewer_accept(httpd_req_t *req)
 {
     int fd = httpd_req_to_sockfd(req);
     if (fd < 0) {
         ESP_LOGE(TAG, "viewer_accept: httpd_req_to_sockfd failed");
         return ESP_FAIL;
+    }
+
+    /* W6 — single-viewer enforcement. May reject with
+     * viewer_limit text + ESP_FAIL (closes the new socket). */
+    esp_err_t chk = ws_cams_check_single_viewer(req, fd);
+    if (chk != ESP_OK) {
+        return chk;
     }
 
     s_httpd     = req->handle;
