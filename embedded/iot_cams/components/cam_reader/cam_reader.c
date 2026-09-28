@@ -25,6 +25,7 @@
 
 #include "esp_log.h"
 #include "esp_psram.h"
+#include "esp_timer.h"
 #include "esp_camera.h"
 
 #include "cam_reader.h"
@@ -77,8 +78,15 @@ esp_err_t cam_reader_init(void)
     }
     xSemaphoreGive(s_cam_mutex);
 
-    /* PSRAM detection drives the buffer config at runtime. */
-    size_t psram_size = esp_psram_get_size();
+    /* PSRAM detection drives the buffer config at runtime.
+     * CONFIG_SPIRAM_SUPPORT is set by `idf.py menuconfig` whenever
+     * PSRAM is enabled (CONFIG_SPIRAM=y). When the project builds
+     * with PSRAM off we skip the esp_psram helper and pick the
+     * single-buffer DRAM path. */
+    size_t psram_size = 0;
+#if defined(CONFIG_SPIRAM_SUPPORT) && CONFIG_SPIRAM_SUPPORT
+    psram_size = esp_psram_get_size();
+#endif
 
     camera_config_t camera_config = {
         .pin_pwdn      = CAM_PIN_PWDN,

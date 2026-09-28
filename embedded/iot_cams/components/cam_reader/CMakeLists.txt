@@ -11,5 +11,10 @@
 idf_component_register(
     SRCS "cam_reader.c"
     INCLUDE_DIRS "include"
-    PRIV_REQUIRES nvs_flash esp_psram esp32-camera
+    # esp32-camera is in REQUIRES (not PRIV_REQUIRES) because
+    # cam_reader.h exposes camera_fb_t* in its public surface;
+    # any consumer that includes cam_reader.h transitively needs
+    # the esp_camera.h include path.
+    REQUIRES esp32-camera
+    PRIV_REQUIRES nvs_flash esp_psram esp_timer
 )
