@@ -303,31 +303,48 @@ static esp_err_t viewer_accept(httpd_req_t *req)
     return ESP_OK;
 }
 
-/* ---------- post-handshake drop path ---------- */
-
+/* ---------- post-handshake drop path ----------
+ *
+ * Important: this handler is called once per inbound WS frame.
+ * Our use case is ONE-WAY (chip pushes JPEG bytes out; the
+ * viewer does not send frames). Inbound frames should be
+ * silently discarded — NOT drained through
+ * httpd_ws_recv_frame.
+ *
+ * Why not drain? Operator-flash telemetry from device 3
+ * (2026-09-28) showed that calling httpd_ws_recv_frame in
+ * the post-handshake handler produces a hot loop when the
+ * underlying socket is in a half-closed state:
+ *   - the httpd re-invokes the handler once per spurious
+ *     byte pair it sees on the socket (TCP retransmits,
+ *     kernel-level keepalive probes, stale buffered bytes
+ *     after a client-side close),
+ *   - httpd_ws_recv_frame logs "WS frame is not properly
+ *     masked" because client→server frames must be masked
+ *     per RFC 6455 §5.1, and these spurious bytes are not,
+ *   - each iteration logs twice (~60 lines/sec on the
+ *     operator's monitor, drowning out useful telemetry).
+ *
+ * The httpd's internal logic still receives the first byte
+ * via httpd_ws_get_frame_type() before invoking our handler;
+ * for non-control opcodes it calls sd->ws_handler() and we
+ * just return ESP_OK. The httpd then re-enters its main
+ * select() loop. For PING/CLOSE opcodes the httpd auto-
+ * responds internally and we never see them — that's the
+ * documented ESP-IDF behavior (see
+ * components/esp_http_server/src/httpd_parse.c:807-808).
+ *
+ * If we ever land the {"cmd":"stream"} text-frame control
+ * plane (a follow-up branch), this becomes the dispatch
+ * site for incoming JSON commands. The reference project
+ * uses a similar drain-then-parse pattern; we'd re-introduce
+ * httpd_ws_recv_frame here at that point.
+ */
 static esp_err_t ws_cams_drain_frame(httpd_req_t *req)
 {
-    httpd_ws_frame_t pkt = {0};
-    if (httpd_ws_recv_frame(req, &pkt, 0) != ESP_OK) {
-        return ESP_OK;
-    }
-    if (pkt.len == 0) {
-        return ESP_OK;
-    }
-
-    uint8_t  scratch[64];
-    size_t   remaining = pkt.len;
-    while (remaining > 0) {
-        size_t want = (remaining < sizeof(scratch))
-                          ? remaining : sizeof(scratch);
-        httpd_ws_frame_t drain = {0};
-        drain.len     = want;
-        drain.payload = scratch;
-        if (httpd_ws_recv_frame(req, &drain, want) != ESP_OK) {
-            return ESP_OK;
-        }
-        remaining -= want;
-    }
+    /* Log at debug so the path stays observable without
+     * spamming the operator's monitor. */
+    ESP_LOGD(TAG, "inbound frame dropped (no control plane in W0..W8)");
     return ESP_OK;
 }
 
