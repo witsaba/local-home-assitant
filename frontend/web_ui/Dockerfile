@@ -67,6 +67,10 @@ ENV PORT=5173
 
 RUN corepack enable && corepack prepare pnpm@11.8.0 --activate
 
+# wget is used by the docker compose healthcheck. node:22-alpine does
+# not ship it, and we want a small, deterministic install.
+RUN apk add --no-cache wget
+
 # Re-install without devDependencies. We can't --frozen-lockfile here
 # because the lockfile describes the full tree; --prod reads it
 # correctly and only pulls runtime deps.
