@@ -8,8 +8,8 @@ import (
 
 func TestLoad_Defaults(t *testing.T) {
 	clearEnv(t)
-	// PG_PASSWORD has no default — set a dummy so validation passes.
-	t.Setenv("PG_PASSWORD", "dummy")
+	// MESSAGING_CORE_PG_PASSWORD has no default — set a dummy so validation passes.
+	t.Setenv("MESSAGING_CORE_PG_PASSWORD", "dummy")
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -64,15 +64,15 @@ func TestLoad_Overrides(t *testing.T) {
 	t.Setenv("LOG_LEVEL", "DEBUG")
 	t.Setenv("NATS_DATA_DIR", "/var/lib/nats")
 	t.Setenv("STREAM_PORT", "9000")
-	t.Setenv("PG_HOST", "192.168.1.10")
-	t.Setenv("PG_PORT", "5433")
-	t.Setenv("PG_DATABASE", "testdb")
-	t.Setenv("PG_USER", "pg-test")
-	t.Setenv("PG_PASSWORD", "secret")
-	t.Setenv("PG_MAX_CONNS", "25")
-	t.Setenv("PG_MIN_CONNS", "5")
-	t.Setenv("PG_MAX_CONN_LIFETIME", "2h")
-	t.Setenv("PG_MAX_CONN_IDLE_TIME", "15m")
+	t.Setenv("MESSAGING_CORE_PG_HOST", "192.168.1.10")
+	t.Setenv("MESSAGING_CORE_PG_PORT", "5433")
+	t.Setenv("MESSAGING_CORE_PG_DATABASE", "testdb")
+	t.Setenv("MESSAGING_CORE_PG_USER", "pg-test")
+	t.Setenv("MESSAGING_CORE_PG_PASSWORD", "secret")
+	t.Setenv("MESSAGING_CORE_PG_MAX_CONNS", "25")
+	t.Setenv("MESSAGING_CORE_PG_MIN_CONNS", "5")
+	t.Setenv("MESSAGING_CORE_PG_MAX_CONN_LIFETIME", "2h")
+	t.Setenv("MESSAGING_CORE_PG_MAX_CONN_IDLE_TIME", "15m")
 
 	cfg, err := Load()
 	if err != nil {
@@ -148,23 +148,23 @@ func TestLoad_OutOfRangeNATSPort(t *testing.T) {
 
 func TestLoad_MissingPGPassword(t *testing.T) {
 	clearEnv(t)
-	// PG_PASSWORD unset + PG_USER set → validation should fail
-	t.Setenv("PG_USER", "pg-messaging-core")
+	// MESSAGING_CORE_PG_PASSWORD unset + PG_USER set → validation should fail
+	t.Setenv("MESSAGING_CORE_PG_USER", "pg-messaging-core")
 	if _, err := Load(); err == nil {
-		t.Fatal("expected error for missing PG_PASSWORD, got nil")
+		t.Fatal("expected error for missing MESSAGING_CORE_PG_PASSWORD, got nil")
 	}
 }
 
-// TestLoad_EmptyPGHostIsCoveredByDefault covers the case where PG_HOST
+// TestLoad_EmptyPGHostIsCoveredByDefault covers the case where MESSAGING_CORE_PG_HOST
 // would be empty but is rescued by the fallback. This test confirms the
 // fallback never produces an empty string.
 func TestLoad_EmptyPGHostFallsBack(t *testing.T) {
 	clearEnv(t)
-	t.Setenv("PG_HOST", "")
-	t.Setenv("PG_PASSWORD", "secret")
+	t.Setenv("MESSAGING_CORE_PG_HOST", "")
+	t.Setenv("MESSAGING_CORE_PG_PASSWORD", "secret")
 	cfg, err := Load()
 	if err != nil {
-		t.Fatalf("unexpected error (empty PG_HOST should fall back to default): %v", err)
+		t.Fatalf("unexpected error (empty MESSAGING_CORE_PG_HOST should fall back to default): %v", err)
 	}
 	if cfg.PGHost != "127.0.0.1" {
 		t.Errorf("PGHost: got %q, want fallback %q", cfg.PGHost, "127.0.0.1")
@@ -174,7 +174,7 @@ func TestLoad_EmptyPGHostFallsBack(t *testing.T) {
 func TestLoad_OutOfRangeSTREAMPort(t *testing.T) {
 	clearEnv(t)
 	t.Setenv("STREAM_PORT", "70000")
-	t.Setenv("PG_PASSWORD", "secret")
+	t.Setenv("MESSAGING_CORE_PG_PASSWORD", "secret")
 	if _, err := Load(); err == nil {
 		t.Fatal("expected error for STREAM_PORT=70000, got nil")
 	}
@@ -182,10 +182,10 @@ func TestLoad_OutOfRangeSTREAMPort(t *testing.T) {
 
 func TestLoad_OutOfRangePGPort(t *testing.T) {
 	clearEnv(t)
-	t.Setenv("PG_PORT", "0")
-	t.Setenv("PG_PASSWORD", "secret")
+	t.Setenv("MESSAGING_CORE_PG_PORT", "0")
+	t.Setenv("MESSAGING_CORE_PG_PASSWORD", "secret")
 	if _, err := Load(); err == nil {
-		t.Fatal("expected error for PG_PORT=0, got nil")
+		t.Fatal("expected error for MESSAGING_CORE_PG_PORT=0, got nil")
 	}
 }
 
@@ -196,8 +196,8 @@ func clearEnv(t *testing.T) {
 	keys := []string{
 		"NATS_HOST", "NATS_PORT", "LOG_LEVEL", "NATS_DATA_DIR",
 		"STREAM_PORT",
-		"PG_HOST", "PG_PORT", "PG_DATABASE", "PG_USER", "PG_PASSWORD",
-		"PG_MAX_CONNS", "PG_MIN_CONNS", "PG_MAX_CONN_LIFETIME", "PG_MAX_CONN_IDLE_TIME",
+		"MESSAGING_CORE_PG_HOST", "MESSAGING_CORE_PG_PORT", "MESSAGING_CORE_PG_DATABASE", "MESSAGING_CORE_PG_USER", "MESSAGING_CORE_PG_PASSWORD",
+		"MESSAGING_CORE_PG_MAX_CONNS", "MESSAGING_CORE_PG_MIN_CONNS", "MESSAGING_CORE_PG_MAX_CONN_LIFETIME", "MESSAGING_CORE_PG_MAX_CONN_IDLE_TIME",
 	}
 	for _, k := range keys {
 		os.Unsetenv(k)

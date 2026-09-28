@@ -63,18 +63,18 @@ func Load() (Config, error) {
 
 		STREAMPort: envInt("STREAM_PORT", defaultSTREAMPort),
 
-		// Postgres defaults mirror the workers service.
-		PGHost:     envStr("PG_HOST", "127.0.0.1"),
-		PGPort:     envInt("PG_PORT", 5432),
-		PGDatabase: envStr("PG_DATABASE", "witsaba"),
-		PGUser:     envStr("PG_USER", "pg-messaging-core"),
-		PGPassword: envStr("PG_PASSWORD", ""),
+		// Postgres defaults — use MESSAGING_CORE_PG_* env vars.
+		PGHost:     envStr("MESSAGING_CORE_PG_HOST", "127.0.0.1"),
+		PGPort:     envInt("MESSAGING_CORE_PG_PORT", 5432),
+		PGDatabase: envStr("MESSAGING_CORE_PG_DATABASE", "witsaba"),
+		PGUser:     envStr("MESSAGING_CORE_PG_USER", "pg-messaging-core"),
+		PGPassword: envStr("MESSAGING_CORE_PG_PASSWORD", ""),
 
 		// Pool tuning defaults (0 = db package applies safe defaults).
-		PGMaxConns:        envInt("PG_MAX_CONNS", 0),
-		PGMinConns:        envInt("PG_MIN_CONNS", 0),
-		PGMaxConnLifetime: envDuration("PG_MAX_CONN_LIFETIME", 0),
-		PGMaxConnIdleTime: envDuration("PG_MAX_CONN_IDLE_TIME", 0),
+		PGMaxConns:        envInt("MESSAGING_CORE_PG_MAX_CONNS", 0),
+		PGMinConns:        envInt("MESSAGING_CORE_PG_MIN_CONNS", 0),
+		PGMaxConnLifetime: envDuration("MESSAGING_CORE_PG_MAX_CONN_LIFETIME", 0),
+		PGMaxConnIdleTime: envDuration("MESSAGING_CORE_PG_MAX_CONN_IDLE_TIME", 0),
 	}
 
 	port, err := parsePort(getEnv("NATS_PORT", strconv.Itoa(defaultPort)))
@@ -142,18 +142,18 @@ func validate(cfg Config) error {
 		return fmt.Errorf("LOG_LEVEL: unsupported value %q (want debug|info|warn|error)", cfg.LogLevel)
 	}
 	// Port 0 is acceptable for tests (lets the OS pick a free port).
-	// PG_HOST default is "127.0.0.1" so empty is unreachable here.
+	// MESSAGING_CORE_PG_HOST default is "127.0.0.1" so empty is unreachable here.
 	if cfg.PGPort < 1 || cfg.PGPort > 65535 {
-		return fmt.Errorf("PG_PORT: must be in [1, 65535], got %d", cfg.PGPort)
+		return fmt.Errorf("MESSAGING_CORE_PG_PORT: must be in [1, 65535], got %d", cfg.PGPort)
 	}
 	if cfg.PGDatabase == "" {
-		return errors.New("PG_DATABASE: must not be empty")
+		return errors.New("MESSAGING_CORE_PG_DATABASE: must not be empty")
 	}
 	if cfg.PGUser == "" {
-		return errors.New("PG_USER: must not be empty")
+		return errors.New("MESSAGING_CORE_PG_USER: must not be empty")
 	}
 	if cfg.PGPassword == "" {
-		return errors.New("PG_PASSWORD: must not be empty")
+		return errors.New("MESSAGING_CORE_PG_PASSWORD: must not be empty")
 	}
 	if cfg.STREAMPort < 1 || cfg.STREAMPort > 65535 {
 		return fmt.Errorf("STREAM_PORT: must be in [1, 65535], got %d", cfg.STREAMPort)

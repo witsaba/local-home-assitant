@@ -36,7 +36,17 @@ var Dialer = &websocket.Dialer{
 	// ReadBufferSize/WriteBufferSize are 0 → sizes chosen by websocket lib.
 }
 
+// WSClient is the interface for chip WebSocket clients.
+// Exposed so the streamhub package can depend on this interface without
+// importing gorilla/websocket directly.
+type WSClient interface {
+	Connect(ctx context.Context) error
+	Close(ctx context.Context) error
+	IsConnected() bool
+}
+
 // ChipClient connects to a chip's /ws/cams endpoint and reads frames.
+// It implements WSClient.
 type ChipClient struct {
 	chipIP  string
 	onFrame func([]byte) // called with each binary JPEG frame; nil means disconnected

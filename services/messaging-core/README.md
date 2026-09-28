@@ -45,17 +45,17 @@ All configuration comes from environment variables. Defaults make the service ru
 | `STREAM_PORT` | `8080` | **HTTP/WS port** for the camera streaming gateway. |
 | `LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error`. |
 | `NATS_DATA_DIR` | *(empty)* | Reserved for JetStream follow-up. |
-| `PG_HOST` | `127.0.0.1` | Postgres host. |
-| `PG_PORT` | `5432` | Postgres port. |
-| `PG_DATABASE` | `witsaba` | Database name. |
-| `PG_USER` | `pg-messaging-core` | Postgres role (SELECT on `witsaba.devices`). |
-| `PG_PASSWORD` | *(none)* | Required. |
-| `PG_MAX_CONNS` | `10` | Pool max connections. |
-| `PG_MIN_CONNS` | `1` | Pool min connections. |
-| `PG_MAX_CONN_LIFETIME` | `1h` | Pool max connection lifetime. |
-| `PG_MAX_CONN_IDLE_TIME` | `30m` | Pool max idle time. |
+| `MESSAGING_CORE_PG_HOST` | `127.0.0.1` | Postgres host. |
+| `MESSAGING_CORE_PG_PORT` | `5432` | Postgres port. |
+| `MESSAGING_CORE_PG_DATABASE` | `witsaba` | Database name. |
+| `MESSAGING_CORE_PG_USER` | `pg-messaging-core` | Postgres role (SELECT on `witsaba.devices`). |
+| `MESSAGING_CORE_PG_PASSWORD` | *(none)* | Required. |
+| `MESSAGING_CORE_PG_MAX_CONNS` | `10` | Pool max connections. |
+| `MESSAGING_CORE_PG_MIN_CONNS` | `1` | Pool min connections. |
+| `MESSAGING_CORE_PG_MAX_CONN_LIFETIME` | `1h` | Pool max connection lifetime. |
+| `MESSAGING_CORE_PG_MAX_CONN_IDLE_TIME` | `30m` | Pool max idle time. |
 
-Invalid values (non-numeric port, missing PG_PASSWORD, unknown log level) cause the process to exit with code `2`.
+Invalid values (non-numeric port, missing MESSAGING_CORE_PG_PASSWORD, unknown log level) cause the process to exit with code `2`.
 
 ---
 

@@ -113,19 +113,19 @@ services:
       STREAM_PORT: ${STREAM_PORT:-8080}
       LOG_LEVEL: ${LOG_LEVEL:-info}
       # Postgres connection for the camera streaming gateway.
-      # PG_PASSWORD defaults to PG_MESSAGING_CORE_PASSWORD so operators
-      # only set one value per role in .env; set PG_PASSWORD explicitly
-      # to override.
-      PG_HOST: ${PG_HOST:-127.0.0.1}
-      PG_PORT: ${PG_PORT:-${POSTGRES_PORT:-5432}}
-      PG_DATABASE: ${PG_DATABASE:-${POSTGRES_DB:-witsaba}}
-      PG_USER: ${PG_USER:-pg-messaging-core}
-      PG_PASSWORD: ${PG_PASSWORD:-${PG_MESSAGING_CORE_PASSWORD}}
+      # Use MESSAGING_CORE_PG_* env vars (not generic PG_*) to avoid
+      # colliding with the workers service. Password defaults to
+      # PG_MESSAGING_CORE_PASSWORD so operators set one value per role.
+      MESSAGING_CORE_PG_HOST: ${MESSAGING_CORE_PG_HOST:-127.0.0.1}
+      MESSAGING_CORE_PG_PORT: ${MESSAGING_CORE_PG_PORT:-${POSTGRES_PORT:-5432}}
+      MESSAGING_CORE_PG_DATABASE: ${MESSAGING_CORE_PG_DATABASE:-${POSTGRES_DB:-witsaba}}
+      MESSAGING_CORE_PG_USER: ${MESSAGING_CORE_PG_USER:-pg-messaging-core}
+      MESSAGING_CORE_PG_PASSWORD: ${MESSAGING_CORE_PG_PASSWORD:-${PG_MESSAGING_CORE_PASSWORD}}
       # Optional pool tuning (0 = safe defaults applied by the binary).
-      PG_MAX_CONNS: ${PG_MAX_CONNS:-0}
-      PG_MIN_CONNS: ${PG_MIN_CONNS:-0}
-      PG_MAX_CONN_LIFETIME: ${PG_MAX_CONN_LIFETIME:-0}
-      PG_MAX_CONN_IDLE_TIME: ${PG_MAX_CONN_IDLE_TIME:-0}
+      MESSAGING_CORE_PG_MAX_CONNS: ${MESSAGING_CORE_PG_MAX_CONNS:-0}
+      MESSAGING_CORE_PG_MIN_CONNS: ${MESSAGING_CORE_PG_MIN_CONNS:-0}
+      MESSAGING_CORE_PG_MAX_CONN_LIFETIME: ${MESSAGING_CORE_PG_MAX_CONN_LIFETIME:-0}
+      MESSAGING_CORE_PG_MAX_CONN_IDLE_TIME: ${MESSAGING_CORE_PG_MAX_CONN_IDLE_TIME:-0}
     depends_on:
       postgres:
         condition: service_healthy
