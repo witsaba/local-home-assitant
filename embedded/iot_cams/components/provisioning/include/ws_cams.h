@@ -39,6 +39,11 @@ void ws_cams_reset_for_test(void);
 int  ws_cams_viewer_fd_get(void);
 bool ws_cams_is_uri_registered(void);
 
+/* W7 hook — provisioning's STA-disconnected event subscriber
+ * calls this to clear the viewer slot + sink so the next
+ * IP_EVENT_STA_GOT_IP re-attach starts from a clean slate. */
+void ws_cams_on_sta_disconnected(void);
+
 #ifdef __cplusplus
 }
 #endif

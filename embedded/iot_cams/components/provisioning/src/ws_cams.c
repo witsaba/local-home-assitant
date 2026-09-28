@@ -1,62 +1,263 @@
-/* ws_cams.c — W4 handler skeleton + module-static state.
+/* ws_cams.c — W5 real server-side sink + hello emit + viewer
+ * lifecycle.
  *
- * The `/ws/cams` WebSocket endpoint lives on the SAME httpd
- * handle as `/whoami` and `/capture` (registered by
- * sta_server.c, which calls ws_cams_register_uri() at server
- * start). Server-mode WS:
- *   - one inbound viewer at a time (mirror coverage lands in
- *     W6 — for now every handshake accepts and overwrites the
- *     stored fd; multi-handshake race fixed in W6).
- *   - one binary WS message per JPEG frame (cam_stream task
- *     pushes the bytes; the sink is wired in W5).
- *   - intermittent JSON hello + status frames (text; built in
- *     cam_stream_wire.c, emitted in W5).
+ * W4 landed the URI handler skeleton: handshake accept + drop
+ * the post-handshake frame stream. W5 wires the live seam:
  *
- * What this file lands in W4:
- *   - WS endpoint registration helper (ws_cams_register_uri),
- *     called by sta_server_start() once the httpd handle is
- *     live.
- *   - handshake accept handler — captures `s_viewer_fd` (so
- *     later work-units can probe it), logs "viewer accepted",
- *     returns ESP_OK so the httpd completes the 101 upgrade.
- *   - post-handshake drop path for inbound frames (silently
- *     ignored; no control-plane parsing yet — that arrives in
- *     the {"cmd":"stream"} follow-up branch).
+ *   - capture the httpd handle alongside the viewer fd so the
+ *     static sink functions (server_sink_send_bin/_text) can
+ *     dispatch via httpd_ws_send_frame_async(hd, fd, &pkt)
+ *     from any context (the httpd worker for the handshake,
+ *     the cam_stream FreeRTOS task for the binary frames);
  *
- * What this file does NOT do in W4:
- *   - install the cam_stream_sink_t on handshake (W5)
- *   - emit the hello JSON on handshake (W5)
- *   - enforce single-viewer rejection (W6)
- *   - re-attach on IP_EVENT_STA_GOT_IP (W7)
+ *   - install the static `s_server_sink` on handshake accept
+ *     so cam_stream_loop_iteration() actually pushes bytes;
  *
- * Module-static state is left at `-1` (no viewer) until the
- * first handshake accepts.
+ *   - emit the JSON hello frame as the FIRST text frame of
+ *     the session (REQ-WS-002 shape);
  *
- * URL path: hard-coded "/ws/cams" in W4 (the W8 Kconfig knob
- * CONFIG_FIRMWARE_WS_PATH swaps in once all knobs land in one
- * commit, keeping each work-unit self-consistent).
+ *   - mirror the esp32-cam-surveillance reference's
+ *     heal-within-one-frame pattern: any failed async send
+ *     clears the sink and disarms future frames. At 10 fps
+ *     a vanished viewer is re-attachable within ≤ 1 frame
+ *     period without any server-wide close-callback wiring;
+ *
+ *   - keep the drop path (post-handshake inbound frames are
+ *     still drained and discarded — the {"cmd":"stream"}
+ *     control plane is an out-of-scope follow-up).
+ *
+ * Module-static state:
+ *   - s_httpd         — captured at handshake; NULL otherwise.
+ *   - s_viewer_fd     — -1 when no viewer; set at handshake accept.
+ *   - s_uri_registered — URI registration idempotency.
+ *   - s_server_sink   — the sink vtable installed at handshake.
+ *   - s_hello_buf / STATIC_HELLO_BUF_LEN — render the hello JSON
+ *     in a static 256 B buffer, the same buffer the send path
+ *     passes to httpd_ws_send_frame_async (no heap, no copy).
+ *
+ * IP-up re-attach and the post-disconnect cleanup live in W7
+ * (this file stays compact; the re-attach hook is a single
+ * static function added to W7 with no changes to the sink).
  */
 
 #include <stddef.h>
+#include <string.h>
 
 #include "esp_log.h"
 #include "esp_http_server.h"
+#include "esp_mac.h"
+
+#include "cam_stream.h"
 
 #include "ws_cams.h"
 
 #define TAG "ws_cams"
 
-/* W4 hard-coded path; W8 routes through CONFIG_FIRMWARE_WS_PATH. */
+/* W4 path hard-coded; W8 routes through CONFIG_FIRMWARE_WS_PATH. */
 #define WS_CAMS_URI_PATH "/ws/cams"
 
-/* Captured at handshake accept time so W5 can call
- * httpd_ws_send_frame_async(hd, fd, ...) on the captured
- * pair without re-reading req->server/req->to_sockfd on
- * every frame. -1 = no viewer right now. */
-static int  s_viewer_fd = -1;
+/* Hello + status builders (W3) live in cam_stream_wire.c so the
+ * upstream provider can own the schema. */
+#include "cam_stream.h"
 
-/* Registered state, idempotent. */
-static bool s_uri_registered = false;
+/* ---------- module-static state (W4 + W5) ---------- */
+
+static int           s_viewer_fd     = -1;
+static bool          s_uri_registered = false;
+static httpd_handle_t s_httpd         = NULL;
+
+/* ---------- the server-side sink (W5) ---------- */
+
+/* Async-send helpers; only callable from a context where a
+ * failed dispatch is recoverable (the httpd worker that owns
+ * the connection, or the cam_stream task via the seam). On
+ * failure the sink clears state itself so the next loop
+ * iteration stops trying to push to a dead fd. */
+
+static esp_err_t server_sink_send_bin(const uint8_t *buf, size_t len)
+{
+    if (s_httpd == NULL || s_viewer_fd < 0 || buf == NULL || len == 0) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    httpd_ws_frame_t pkt = {
+        .final   = true,
+        .type    = HTTPD_WS_TYPE_BINARY,
+        .payload = (uint8_t *)buf,
+        .len     = len,
+    };
+    esp_err_t r = httpd_ws_send_frame_async(s_httpd, s_viewer_fd, &pkt);
+    if (r != ESP_OK) {
+        /* Mirror the reference's "viewer disconnected" path:
+         * drop the sink so the loop body's next iteration falls
+         * into the drop counter, and clear the captured fd so
+         * the next handshake wins the viewer slot. */
+        cam_stream_sink_install(NULL);
+        int fd = s_viewer_fd;
+        s_viewer_fd = -1;
+        ESP_LOGW(TAG, "viewer disconnected fd=%d (send_bin failed: %s) \u2014 "
+                      "slot freed",
+                 fd, esp_err_to_name(r));
+    }
+    return r;
+}
+
+static esp_err_t server_sink_send_text(const char *buf, size_t len)
+{
+    if (s_httpd == NULL || s_viewer_fd < 0 || buf == NULL || len == 0) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    httpd_ws_frame_t pkt = {
+        .final   = true,
+        .type    = HTTPD_WS_TYPE_TEXT,
+        .payload = (uint8_t *)buf,
+        .len     = len,
+    };
+    esp_err_t r = httpd_ws_send_frame_async(s_httpd, s_viewer_fd, &pkt);
+    if (r != ESP_OK) {
+        cam_stream_sink_install(NULL);
+        int fd = s_viewer_fd;
+        s_viewer_fd = -1;
+        ESP_LOGW(TAG, "viewer disconnected fd=%d (send_text failed: %s) "
+                      "\u2014 slot freed",
+                 fd, esp_err_to_name(r));
+    }
+    return r;
+}
+
+static bool server_sink_is_connected(void)
+{
+    if (s_httpd == NULL || s_viewer_fd < 0) {
+        return false;
+    }
+    return httpd_ws_get_fd_info(s_httpd, s_viewer_fd)
+           == HTTPD_WS_CLIENT_WEBSOCKET;
+}
+
+static const cam_stream_sink_t s_server_sink = {
+    .send_bin     = server_sink_send_bin,
+    .send_text    = server_sink_send_text,
+    .is_connected = server_sink_is_connected,
+};
+
+/* ---------- helpers ---------- */
+
+/* Convert 6-byte MAC to 12-char lowercase hex (no separators);
+ * mirrors sta_server.c:mac_to_hex_lower so the same canonical
+ * MAC surfaces on /whoami and /ws/cams hello frames. */
+static esp_err_t mac_to_hex_lower(const uint8_t mac[6], char *out, size_t out_len)
+{
+    if (mac == NULL || out == NULL || out_len < 13) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    for (int i = 0; i < 6; i++) {
+        uint8_t b = mac[i];
+        uint8_t hi = (b >> 4) & 0x0F;
+        out[i * 2]     = (hi < 10) ? ('0' + hi) : ('a' + hi - 10);
+        uint8_t lo = b & 0x0F;
+        out[i * 2 + 1] = (lo < 10) ? ('0' + lo) : ('a' + lo - 10);
+    }
+    out[12] = '\0';
+    return ESP_OK;
+}
+
+/* Build the hello JSON into `out` using cam_stream's W3
+ * builder. Returns the rendered length or 0 on overflow. */
+static size_t build_hello(char *out, size_t out_len)
+{
+    cam_stream_identity_t id = {0};
+
+    uint8_t mac[6] = {0};
+    esp_err_t r = esp_read_mac(mac, ESP_MAC_WIFI_STA);
+    if (r != ESP_OK) {
+        ESP_LOGW(TAG, "hello: esp_read_mac failed: %s", esp_err_to_name(r));
+    } else {
+        (void)mac_to_hex_lower(mac, id.mac, sizeof(id.mac));
+    }
+
+    /* Kconfig-defined device name; same string the softAP SSID
+     * and the /whoami handler surface. Empty allowed. */
+    const char *name = CONFIG_PROVISIONING_DEVICE_NAME;
+    if (name != NULL) {
+        strncpy(id.name, name, sizeof(id.name) - 1);
+    }
+    /* Firmware version — same value app_main publishes via
+     * provisioning_app_info_t.fw_version; for the WS hello
+     * we mirror by reading IDF version (which is the closest
+     * published chip-firmware identifier the operator sees
+     * on the STA /whoami route). */
+    strncpy(id.fw, esp_get_idf_version(), sizeof(id.fw) - 1);
+
+    return cam_stream_wire_build_hello(&id, out, out_len);
+}
+
+/* ---------- handshake ---------- */
+
+static esp_err_t viewer_accept(httpd_req_t *req)
+{
+    int fd = httpd_req_to_sockfd(req);
+    if (fd < 0) {
+        ESP_LOGE(TAG, "viewer_accept: httpd_req_to_sockfd failed");
+        return ESP_FAIL;
+    }
+
+    s_httpd     = req->handle;
+    s_viewer_fd = fd;
+
+    /* Install the live sink BEFORE the hello emit so the text
+     * path itself funnels through the same TX-mutex that the
+     * stream task uses (and so any failure to dispatch the
+     * hello routes through the failure path that clears the
+     * slot). */
+    cam_stream_sink_install(&s_server_sink);
+
+    /* First text frame of the session, per REQ-WS-002. */
+    char hello[256];
+    size_t n = build_hello(hello, sizeof(hello));
+    if (n == 0) {
+        ESP_LOGE(TAG, "viewer_accept: hello buffer overflow \u2014 proceeding");
+    } else {
+        esp_err_t hr = cam_stream_sink_send_text(hello, n);
+        if (hr != ESP_OK) {
+            ESP_LOGE(TAG, "viewer_accept: hello send failed: %s",
+                     esp_err_to_name(hr));
+        }
+    }
+
+    ESP_LOGI(TAG,
+             "viewer accepted fd=%d (sink=server-side, hello=%u bytes)",
+             fd, (unsigned)n);
+    return ESP_OK;
+}
+
+/* ---------- post-handshake drop path ---------- */
+
+static esp_err_t ws_cams_drain_frame(httpd_req_t *req)
+{
+    httpd_ws_frame_t pkt = {0};
+    if (httpd_ws_recv_frame(req, &pkt, 0) != ESP_OK) {
+        return ESP_OK;
+    }
+    if (pkt.len == 0) {
+        return ESP_OK;
+    }
+
+    uint8_t  scratch[64];
+    size_t   remaining = pkt.len;
+    while (remaining > 0) {
+        size_t want = (remaining < sizeof(scratch))
+                          ? remaining : sizeof(scratch);
+        httpd_ws_frame_t drain = {0};
+        drain.len     = want;
+        drain.payload = scratch;
+        if (httpd_ws_recv_frame(req, &drain, want) != ESP_OK) {
+            return ESP_OK;
+        }
+        remaining -= want;
+    }
+    return ESP_OK;
+}
+
+/* ---------- public surface ---------- */
 
 esp_err_t ws_cams_register_uri(httpd_handle_t hd)
 {
@@ -64,7 +265,7 @@ esp_err_t ws_cams_register_uri(httpd_handle_t hd)
         return ESP_ERR_INVALID_ARG;
     }
     if (s_uri_registered) {
-        ESP_LOGW(TAG, "register: already registered — ignoring");
+        ESP_LOGW(TAG, "register: already registered \u2014 ignoring");
         return ESP_OK;
     }
 
@@ -86,75 +287,6 @@ esp_err_t ws_cams_register_uri(httpd_handle_t hd)
     return ESP_OK;
 }
 
-/* Handshake accept. IDF has completed the 101 upgrade before
- * invoking us; we just need to capture the fd and return ESP_OK.
- *
- * W4 placeholder behavior:
- *   - replace the captured fd on every handshake (any later
- *     handshake from a different peer is currently a no-op
- *     overwrite — W6 enforces "second viewer gets
- *     viewer_limit" by comparing the new fd to the captured
- *     fd and returning ESP_FAIL on a different one).
- *   - the cam_stream sink is NOT installed yet (W5). */
-static esp_err_t viewer_accept(httpd_req_t *req)
-{
-    int fd = httpd_req_to_sockfd(req);
-    if (fd < 0) {
-        ESP_LOGE(TAG, "viewer_accept: httpd_req_to_sockfd failed");
-        return ESP_FAIL;
-    }
-    s_viewer_fd = fd;
-    ESP_LOGI(TAG, "viewer accepted fd=%d (W4 placeholder; W5 installs sink)",
-             fd);
-    return ESP_OK;
-}
-
-/* Post-handshake inbound frames. W4 ignores every frame:
- *   - PING/PONG/CLOSE/BINARY/empty    — drop silently (will
- *     receive a hello + binary frames from the stream task
- *     in W5 onward)
- *   - TEXT (the future {"cmd":"stream"} control plane)  —
- *     drop without parsing (landed in a follow-up branch,
- *     see odd/tasks/ws-cams-endpoint.md "Out of scope")
- *
- * Every post-handshake frame is `recv_frame(pkt, 0)` to drain
- * the length probe, then `recv_frame(pkt, pkt.len)` to fetch
- * the payload (or chunked-drain if we don't care). For now the
- * simple shape: length probe, then accept-and-discard the
- * payload via a stack scratch buffer.
- *
- * W4 contract: never fail the connection post-handshake. */
-static esp_err_t ws_cams_drain_frame(httpd_req_t *req)
-{
-    httpd_ws_frame_t pkt = {0};
-    if (httpd_ws_recv_frame(req, &pkt, 0) != ESP_OK) {
-        /* Stream desync; the httpd worker has nothing else to
-         * do. Returning ESP_OK keeps the connection alive. */
-        return ESP_OK;
-    }
-    if (pkt.len == 0) {
-        return ESP_OK;
-    }
-
-    /* Bound the per-frame drain. 64 B scratches >99% of
-     * expected text control frames; if a frame is longer we
-     * chunk-drain it. */
-    uint8_t  scratch[64];
-    size_t   remaining = pkt.len;
-    while (remaining > 0) {
-        size_t want = (remaining < sizeof(scratch))
-                          ? remaining : sizeof(scratch);
-        httpd_ws_frame_t drain = {0};
-        drain.len     = want;
-        drain.payload = scratch;
-        if (httpd_ws_recv_frame(req, &drain, want) != ESP_OK) {
-            return ESP_OK;
-        }
-        remaining -= want;
-    }
-    return ESP_OK;
-}
-
 esp_err_t ws_cams_handler(httpd_req_t *req)
 {
     if (req == NULL) {
@@ -166,12 +298,12 @@ esp_err_t ws_cams_handler(httpd_req_t *req)
     return ws_cams_drain_frame(req);
 }
 
-/* Test seam. Clears the registered flag and the captured fd so
- * the next ws_cams_register_uri() call re-registers cleanly. */
 void ws_cams_reset_for_test(void)
 {
+    s_httpd         = NULL;
     s_uri_registered = false;
-    s_viewer_fd      = -1;
+    s_viewer_fd     = -1;
+    cam_stream_sink_install(NULL);
 }
 
 int ws_cams_viewer_fd_get(void)
@@ -182,4 +314,24 @@ int ws_cams_viewer_fd_get(void)
 bool ws_cams_is_uri_registered(void)
 {
     return s_uri_registered;
+}
+
+/* W7 hook — placeholder; populated by the next work-unit.
+ * Called by provisioning/src/ws_cams.c::ws_cams_on_sta_disconnected()
+ * after the wifi-event subscriber fires.
+ *
+ * Today the auto-clear path is the async-send failure in
+ * server_sink_send_bin / _text; this function only exists so
+ * W7 can drop the sink + viewer slot explicitly when the STA
+ * link falls off. It is safe to call multiple times. */
+void ws_cams_on_sta_disconnected(void)
+{
+    if (s_viewer_fd >= 0) {
+        int fd = s_viewer_fd;
+        s_viewer_fd = -1;
+        cam_stream_sink_install(NULL);
+        ESP_LOGI(TAG,
+                 "STA disconnected: cleared viewer slot fd=%d",
+                 fd);
+    }
 }

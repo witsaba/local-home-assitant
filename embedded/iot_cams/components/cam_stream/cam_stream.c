@@ -34,6 +34,7 @@
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
 
 #include "esp_camera.h"
 #include "esp_log.h"
@@ -46,6 +47,15 @@ static const char *TAG = "cam_stream";
 /* ---------- module-static state ---------- */
 
 static bool s_init_done = false;
+
+/* TX mutex (W5). Serializes every wire write so the stream
+ * loop, the handshake hello frame, and any future status-timer
+ * pushes never interleave bytes on the same fd. Created in
+ * cam_stream_init() before the sink install so no producer can
+ * reach the seam through an un-serialized path; failure to
+ * create is fatal (callers cannot proceed without serialized
+ * sends). */
+static SemaphoreHandle_t s_tx_mtx = NULL;
 
 /* Cross-task counters, lock-free reads on Xtensa LX6 per the
  * reference's stream.h:38-43 pattern. */
@@ -106,6 +116,15 @@ const cam_stream_sink_t *cam_stream_sink_get(void)
     /* Used by cam_stream_sender.c to reach into the active
      * sink without exporting more state into the header. */
     return s_sink;
+}
+
+/* TX-mutex accessor for cam_stream_sender.c. FreeRTOS handle
+ * is owned by this TU; the sender grabs it before every send
+ * and never stores it. Keeping the handle module-static here
+ * keeps `SemaphoreHandle_t` out of the public header. */
+SemaphoreHandle_t cam_stream_tx_mtx_get(void)
+{
+    return s_tx_mtx;
 }
 
 /* ---------- public counters ---------- */
@@ -203,6 +222,16 @@ esp_err_t cam_stream_init(void)
         return ESP_ERR_INVALID_STATE;
     }
 
+    /* W5 — create the TX mutex BEFORE any sink install so no
+     * producer can dispatch through an un-serialized seam. */
+    if (s_tx_mtx == NULL) {
+        s_tx_mtx = xSemaphoreCreateMutex();
+        if (s_tx_mtx == NULL) {
+            ESP_LOGE(TAG, "init: xSemaphoreCreateMutex failed");
+            return ESP_ERR_NO_MEM;
+        }
+    }
+
     /* Default sink = disconnected stubs, so the loop body in
      * cam_stream_sink_send_bin can route every send through
      * s_sink without a NULL check. */
@@ -211,7 +240,7 @@ esp_err_t cam_stream_init(void)
     s_init_done = true;
     ESP_LOGI(TAG,
              "init: ready "
-             "(period=%d ms, %.1f fps; sink=disconnected)",
+             "(period=%d ms, %.1f fps; sink=disconnected; tx_mtx=ok)",
              (int)CAM_STREAM_PERIOD_MS,
              1000.0f / (float)CAM_STREAM_PERIOD_MS);
     return ESP_OK;

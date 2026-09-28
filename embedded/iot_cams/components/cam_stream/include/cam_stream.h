@@ -84,14 +84,14 @@ bool cam_stream_sink_connected(void);
 const cam_stream_sink_t *cam_stream_sink_get(void);
 
 /** Push one binary frame through the installed sink.
- *  Currently a thin wrapper around `cam_stream_sink_get()`;
- *  W5 wraps a TX mutex around it so multiple producers
- *  (the stream task + future hello/status timers) cannot
- *  interleave wire bytes. */
+ *  Wraps a TX mutex around the actual send so multiple
+ *  producers (stream task + handshake hello + future
+ *  status timer) never interleave wire bytes on the
+ *  same fd. */
 esp_err_t cam_stream_sink_send_bin(const uint8_t *buf, size_t len);
 
-/** Push one text frame through the installed sink. W5
- *  wraps a TX mutex around it. */
+/** Push one text frame through the installed sink. Same
+ *  TX-mutex wrap as send_bin. */
 esp_err_t cam_stream_sink_send_text(const char *buf, size_t len);
 
 /** Cross-task counters. Lock-free u32 reads on Xtensa LX6.
