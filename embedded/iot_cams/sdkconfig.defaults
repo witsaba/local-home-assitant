@@ -59,14 +59,36 @@ CONFIG_PROVISIONING_POP="abcd1234"
 # at the IDF default.
 # CONFIG_ESP_PROTOCOMM_SUPPORT_SECURITY_VERSION_1=y
 
-# === Default partition table ===
+# === PSRAM ===
 #
-# The IDF v5.5 default partition table (single 1 MB 'factory'
-# app + 24 KB NVS + 4 KB PHY) is correct for this firmware
-# at -O3 — see `idf.py build` output
-# `iot_cams.bin binary size 0xdf220 bytes ... 0x20de0 bytes
-# (13%) free`. Leave the partition table at IDF defaults
-# until camera + ws components push past the 13% ceiling;
-# at that point switch to `partitions.csv` with a 1.5 MB
-# factory partition (matches `esp32-cam-surveillance`'s
-# firmware/sdkconfig.defaults convention).
+# The AI-Thinker ESP32-CAM ships with a 4 MB SPI PSRAM
+# (Winbond W25Q32-style quad-SPI). Without this enabled the
+# camera driver is forced into the single-DRAM-buffer path
+# (~280 KB free DRAM after IDF allocations) and `fb_count=1`,
+# which is the main reason captured JPEG frames at SVGA and
+# above are tight on memory. Enabling PSRAM unlocks the
+# double-buffer `fb_count=2, fb_location=CAMERA_FB_IN_PSRAM`
+# path that `cam_reader.c` already selects via the
+# `#if CONFIG_SPIRAM_SUPPORT` gate.
+#
+# Mode = QUAD matches the AI-Thinker reference schematic;
+# SPEED = 40M aligns with the flash frequency. MALLOC exposes
+# PSRAM as a malloc-capable region for `esp_camera_fb_get` /
+# any future large allocation (camera_settings, future ring
+# buffer, etc.).
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_QUAD=y
+CONFIG_SPIRAM_SPEED_40M=y
+CONFIG_SPIRAM_USE_MALLOC=y
+
+# === Partition table ===
+#
+# Custom 1.5 MB factory partition, declared in `partitions.csv`.
+# The IDF v5.5 default (single 1 MB factory) leaves the firmware
+# at 99% full once PSRAM is enabled — `app_check_size` prints
+# a "1% free" warning. 1.5 MB matches `esp32-cam-surveillance`'s
+# convention and gives headroom for the camera reader, the
+# provisioning httpd, and any future WebSocket control plane.
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+CONFIG_PARTITION_TABLE_OFFSET=0x8000
