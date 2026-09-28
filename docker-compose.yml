@@ -114,7 +114,7 @@ services:
       MESSAGING_CORE_PG_PORT: ${MESSAGING_CORE_PG_PORT:-${POSTGRES_PORT:-5432}}
       MESSAGING_CORE_PG_DATABASE: ${MESSAGING_CORE_PG_DATABASE:-${POSTGRES_DB:-witsaba}}
       MESSAGING_CORE_PG_USER: ${MESSAGING_CORE_PG_USER:-pg-messaging-core}
-      MESSAGING_CORE_PG_PASSWORD: ${MESSAGING_CORE_PG_PASSWORD:-${PG_MESSAGING_CORE_PASSWORD}}
+      MESSAGING_CORE_PG_PASSWORD: ${PG_MESSAGING_CORE_PASSWORD:?PG_MESSAGING_CORE_PASSWORD must be set in .env}
       MESSAGING_CORE_PG_MAX_CONNS: ${MESSAGING_CORE_PG_MAX_CONNS:-0}
       MESSAGING_CORE_PG_MIN_CONNS: ${MESSAGING_CORE_PG_MIN_CONNS:-0}
       MESSAGING_CORE_PG_MAX_CONN_LIFETIME: ${MESSAGING_CORE_PG_MAX_CONN_LIFETIME:-0}
@@ -160,7 +160,7 @@ services:
       PG_PORT: ${PG_PORT:-${POSTGRES_PORT:-5432}}
       PG_DATABASE: ${PG_DATABASE:-${POSTGRES_DB:-witsaba}}
       PG_USER: ${PG_USER:-pg-worker}
-      PG_PASSWORD: ${PG_PASSWORD:-${PG_WORKER_PASSWORD}}
+      PG_PASSWORD: ${PG_WORKER_PASSWORD:?PG_WORKER_PASSWORD must be set in .env}
 
   # --------------------------------------------------------------------------
   # web_ui: Qwik + Qwik City front-end (services/frontend/web_ui/).
@@ -211,7 +211,7 @@ services:
       PG_PORT: ${PG_PORT:-${POSTGRES_PORT:-5432}}
       PG_DATABASE: ${PG_DATABASE:-${POSTGRES_DB:-witsaba}}
       PG_USER: ${PG_USER:-pg-worker}
-      PG_PASSWORD: ${PG_PASSWORD:-${PG_WORKER_PASSWORD}}
+      PG_PASSWORD: ${PG_WORKER_PASSWORD:?PG_WORKER_PASSWORD must be set in .env}
     healthcheck:
       # Curl the dev server's index. --fail makes curl exit non-zero on
       # 4xx/5xx, --max-time bounds the wait. /tmp is writable in the
