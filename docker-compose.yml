@@ -160,7 +160,7 @@ services:
       PG_PORT: ${PG_PORT:-${POSTGRES_PORT:-5432}}
       PG_DATABASE: ${PG_DATABASE:-${POSTGRES_DB:-witsaba}}
       PG_USER: ${PG_USER:-pg-worker}
-      PG_PASSWORD: ${PG_WORKER_PASSWORD:?PG_WORKER_PASSWORD must be set in .env}
+      PG_WORKER_PASSWORD: ${PG_WORKER_PASSWORD:?PG_WORKER_PASSWORD must be set in .env}
 
   # --------------------------------------------------------------------------
   # web_ui: Qwik + Qwik City front-end (services/frontend/web_ui/).
