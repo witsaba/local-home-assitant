@@ -6,15 +6,15 @@
 # Mac dev. Validation deferred to a Linux host.
 #
 # Networking model:
-#   - workers and web_ui: `network_mode: host` so they see the LAN for
-#     device discovery and the host loopback for Postgres/NATS.
-#   - messaging-core and postgres: on a private `messaging-core-internal`
-#     bridge network. Postgres binds to 0.0.0.0 inside the bridge so
-#     messaging-core reaches it via Docker DNS (service name: "postgres").
-#   - The embedded NATS server in messaging-core binds to 0.0.0.0 (all
-#     interfaces). Workers on the host network reach it at the host's IP
-#     or at host.docker.internal:4222.
-#   - web_ui also stays on `network_mode: host` (LAN + host loopback).
+#   - network_mode: host on every service. All containers share the host
+#     network namespace. Workers see the LAN directly. Postgres binds to
+#     0.0.0.0 (all host interfaces) so every container reaches it at
+#     127.0.0.1. NATS binds to 0.0.0.0 so every container reaches it
+#     at 127.0.0.1.
+#   - `extra_hosts` maps "messaging-core" to 127.0.0.1 inside each
+#     container so env vars are consistent with the host.
+#   - Postgres IS accessible at 127.0.0.1 from all containers (intentional —
+#     no TLS or auth on the LAN for now; change if LAN becomes untrusted).
 #
 # Postgres bootstrap:
 #   - services/postgres/init/* is mounted at /docker-entrypoint-initdb.d
@@ -43,13 +43,6 @@ volumes:
     # Empty data directory is the signal for the postgres entrypoint
     # to run /docker-entrypoint-initdb.d/ on first boot.
 
-networks:
-  messaging-core-internal:
-    # Private bridge network for postgres + messaging-core. Isolates
-    # the DB from the LAN while allowing Docker DNS service-name
-    # resolution between the two containers.
-    driver: bridge
-
 services:
   postgres:
     # The shared witsaba database. pgvector is preinstalled in this image
@@ -58,13 +51,12 @@ services:
     image: pgvector/pgvector:pg16-trixie
     container_name: witsaba-postgres
     init: true                       # tini as PID 1 — clean signal handling
-    networks:
-      - messaging-core-internal
+    network_mode: host               # shares host network namespace
     restart: unless-stopped
-    # listen_addresses=0.0.0.0 accepts connections from both the
-    # bridge network (messaging-core) and the host network (workers/web_ui
-    # via network_mode: host). Postgres is NOT exposed to the LAN because
-    # the bridge network has no port mappings.
+    # listen_addresses=0.0.0.0 accepts connections from all host
+    # interfaces (loopback + LAN). Under network_mode: host every
+    # container reaches postgres at 127.0.0.1. Postgres is NOT
+    # exposed to the LAN via a published port.
     command:
       - "postgres"
       - "-c"
@@ -82,11 +74,10 @@ services:
       PG_WORKER_PASSWORD: ${PG_WORKER_PASSWORD:?PG_WORKER_PASSWORD must be set in .env}
       PG_MESSAGING_CORE_PASSWORD: ${PG_MESSAGING_CORE_PASSWORD:?PG_MESSAGING_CORE_PASSWORD must be set in .env}
     healthcheck:
-      # pg_isready points at the Docker service name "postgres" which
-      # resolves via the bridge network DNS.
+      # pg_isready exits 0 when the server accepts connections.
       test:
         - "CMD-SHELL"
-        - "pg_isready -h postgres -p 5432 -U ${POSTGRES_USER:-pg-admin} -d ${POSTGRES_DB:-witsaba}"
+        - "pg_isready -h 127.0.0.1 -p ${POSTGRES_PORT:-5432} -U ${POSTGRES_USER:-pg-admin} -d ${POSTGRES_DB:-witsaba}"
       interval: 5s
       timeout: 5s
       retries: 10
@@ -102,22 +93,25 @@ services:
     image: witsaba/messaging-core:local
     container_name: witsaba-messaging-core
     init: true                       # tini as PID 1 — clean signal handling
-    networks:
-      - messaging-core-internal
-      - host                    # host network so web clients on the LAN
-                                # can reach STREAM_PORT on the host IP
+    network_mode: host               # shares host network namespace
     restart: unless-stopped
+    # extra_hosts makes "messaging-core" resolve to 127.0.0.1 inside
+    # the container. Consistent with how NATS_HOST is set for workers.
+    extra_hosts:
+      - "messaging-core:127.0.0.1"
     environment:
-      # NATS binds to 0.0.0.0 so workers on the host network can reach
-      # it at host.docker.internal:4222 or the host's LAN IP:4222.
-      NATS_HOST: 0.0.0.0
+      # NATS_HOST must be 127.0.0.1 (or 0.0.0.0) — it is the bind address
+      # inside this container's network namespace. Workers also connect
+      # at 127.0.0.1 because they share the host network namespace.
+      NATS_HOST: 127.0.0.1
       NATS_PORT: ${NATS_PORT:-4222}
       LOG_LEVEL: ${LOG_LEVEL:-info}
-      # Postgres: resolved via Docker DNS on the bridge network.
-      # Workers/web_ui use generic PG_* vars (host loopback); this
-      # service uses MESSAGING_CORE_PG_* vars (bridge network).
-      MESSAGING_CORE_PG_HOST: postgres
-      MESSAGING_CORE_PG_PORT: 5432
+      # Postgres: all containers share host network, reach postgres at
+      # 127.0.0.1. MESSAGING_CORE_PG_HOST defaults to 127.0.0.1 in
+      # compose (operators override via .env if needed). Use
+      # MESSAGING_CORE_PG_* vars to avoid colliding with workers PG_*.
+      MESSAGING_CORE_PG_HOST: ${MESSAGING_CORE_PG_HOST:-127.0.0.1}
+      MESSAGING_CORE_PG_PORT: ${MESSAGING_CORE_PG_PORT:-${POSTGRES_PORT:-5432}}
       MESSAGING_CORE_PG_DATABASE: ${MESSAGING_CORE_PG_DATABASE:-${POSTGRES_DB:-witsaba}}
       MESSAGING_CORE_PG_USER: ${MESSAGING_CORE_PG_USER:-pg-messaging-core}
       MESSAGING_CORE_PG_PASSWORD: ${MESSAGING_CORE_PG_PASSWORD:-${PG_MESSAGING_CORE_PASSWORD}}
@@ -157,16 +151,11 @@ services:
       DISCOVERY_INTERVAL_SECONDS: ${DISCOVERY_INTERVAL_SECONDS:-60}
       DISCOVERY_PROBE_TIMEOUT_MS: ${DISCOVERY_PROBE_TIMEOUT_MS:-1500}
       DISCOVERY_WORKER_POOL_SIZE: ${DISCOVERY_WORKER_POOL_SIZE:-64}
-      # NATS: connect to the host loopback where messaging-core's
-      # embedded NATS listens (NATS_HOST=0.0.0.0 inside the container
-      # means it binds all interfaces including the host network path).
-      NATS_HOST: host.docker.internal
+      # NATS: connect to 127.0.0.1 (shared host network namespace).
+      NATS_HOST: ${NATS_HOST:-messaging-core}
       NATS_PORT: ${NATS_PORT:-4222}
-      # Postgres connection for the devices UPSERT path. Resolved against
-      # the host loopback (Postgres binds to 0.0.0.0 inside the bridge,
-      # reachable from host network at 127.0.0.1). PG_PASSWORD defaults
-      # to PG_WORKER_PASSWORD so operators only set one value per role
-      # in .env; set PG_PASSWORD explicitly to override.
+      # Postgres connection for the devices UPSERT path. All containers
+      # share the host network, so postgres is at 127.0.0.1.
       PG_HOST: ${PG_HOST:-127.0.0.1}
       PG_PORT: ${PG_PORT:-${POSTGRES_PORT:-5432}}
       PG_DATABASE: ${PG_DATABASE:-${POSTGRES_DB:-witsaba}}
@@ -184,10 +173,10 @@ services:
   #       postgres:        { condition: service_healthy }
   #       messaging-core:  { condition: service_healthy }
   #
-  # Network model: same as the Go services — `network_mode: host` so the
-  # dev server is reachable on the host's :5173 (Linux target only; on
-  # Docker Desktop Mac the port is still reachable at localhost:5173
-  # because Docker Desktop forwards host ports on its VM).
+  # Network model: `network_mode: host` so the dev server is reachable on
+  # the host's :5173 (Linux target only; on Docker Desktop Mac the port
+  # is still reachable at localhost:5173 because Docker Desktop forwards
+  # host ports on its VM).
   #
   # The container's CMD runs the Vite dev server. Override with
   # `pnpm preview` for the production build artefacts (see the Dockerfile
