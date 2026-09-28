@@ -72,13 +72,42 @@ static int           s_viewer_fd     = -1;
 static bool          s_uri_registered = false;
 static httpd_handle_t s_httpd         = NULL;
 
-/* ---------- the server-side sink (W5) ---------- */
+/* ---------- the server-side sink (W5 + operator-flash fix) ---------- */
+
+/* Centralized "viewer is gone" path. Schedules the httpd
+ * session close (via httpd_sess_trigger_close which queues
+ * httpd_sess_close) AND clears our module state. Idempotent;
+ * safe to call from any context that holds s_viewer_fd (the
+ * httpd worker, the cam_stream FreeRTOS task, or the wifi
+ * lifecycle subscribers via ws_cams_on_sta_disconnected). */
+static void ws_cams_trigger_close_and_clear(void)
+{
+    if (s_httpd && s_viewer_fd >= 0) {
+        esp_err_t r = httpd_sess_trigger_close(s_httpd, s_viewer_fd);
+        if (r != ESP_OK && r != ESP_ERR_NOT_FOUND) {
+            ESP_LOGW(TAG, "trigger_close fd=%d: %s",
+                     s_viewer_fd, esp_err_to_name(r));
+        }
+    }
+    cam_stream_sink_install(NULL);
+    int fd = s_viewer_fd;
+    s_viewer_fd = -1;
+    if (fd >= 0) {
+        ESP_LOGW(TAG,
+                 "viewer slot cleared fd=%d (httpd session "
+                 "scheduled to close)",
+                 fd);
+    }
+}
 
 /* Async-send helpers; only callable from a context where a
  * failed dispatch is recoverable (the httpd worker that owns
  * the connection, or the cam_stream task via the seam). On
  * failure the sink clears state itself so the next loop
- * iteration stops trying to push to a dead fd. */
+ * iteration stops trying to push to a dead fd AND schedules
+ * the httpd session close so the worker doesn't keep waking
+ * on the broken socket (the upstream bug from operator-flash
+ * 2026-09-28 telemetry). */
 
 static esp_err_t server_sink_send_bin(const uint8_t *buf, size_t len)
 {
@@ -93,16 +122,12 @@ static esp_err_t server_sink_send_bin(const uint8_t *buf, size_t len)
     };
     esp_err_t r = httpd_ws_send_frame_async(s_httpd, s_viewer_fd, &pkt);
     if (r != ESP_OK) {
-        /* Mirror the reference's "viewer disconnected" path:
-         * drop the sink so the loop body's next iteration falls
-         * into the drop counter, and clear the captured fd so
-         * the next handshake wins the viewer slot. */
-        cam_stream_sink_install(NULL);
         int fd = s_viewer_fd;
-        s_viewer_fd = -1;
-        ESP_LOGW(TAG, "viewer disconnected fd=%d (send_bin failed: %s) \u2014 "
-                      "slot freed",
+        ESP_LOGW(TAG,
+                 "viewer disconnected fd=%d (send_bin failed: %s) \u2014 "
+                 "scheduling session close",
                  fd, esp_err_to_name(r));
+        ws_cams_trigger_close_and_clear();
     }
     return r;
 }
@@ -120,12 +145,12 @@ static esp_err_t server_sink_send_text(const char *buf, size_t len)
     };
     esp_err_t r = httpd_ws_send_frame_async(s_httpd, s_viewer_fd, &pkt);
     if (r != ESP_OK) {
-        cam_stream_sink_install(NULL);
         int fd = s_viewer_fd;
-        s_viewer_fd = -1;
-        ESP_LOGW(TAG, "viewer disconnected fd=%d (send_text failed: %s) "
-                      "\u2014 slot freed",
+        ESP_LOGW(TAG,
+                 "viewer disconnected fd=%d (send_text failed: %s) \u2014 "
+                 "scheduling session close",
                  fd, esp_err_to_name(r));
+        ws_cams_trigger_close_and_clear();
     }
     return r;
 }
@@ -135,8 +160,25 @@ static bool server_sink_is_connected(void)
     if (s_httpd == NULL || s_viewer_fd < 0) {
         return false;
     }
-    return httpd_ws_get_fd_info(s_httpd, s_viewer_fd)
-           == HTTPD_WS_CLIENT_WEBSOCKET;
+    /* Re-probe every call. If the httpd has detected a dead
+     * socket (e.g. half-closed by the client without a graceful
+     * WS close frame), httpd_ws_get_fd_info returns
+     * HTTPD_WS_CLIENT_INVALID / HTTPD_WS_CLIENT_HTTP rather
+     * than HTTPD_WS_CLIENT_WEBSOCKET. Treat that as "no viewer"
+     * AND schedule the httpd session close so its worker stops
+     * waking on the broken fd. */
+    httpd_ws_client_info_t info =
+        httpd_ws_get_fd_info(s_httpd, s_viewer_fd);
+    if (info == HTTPD_WS_CLIENT_WEBSOCKET) {
+        return true;
+    }
+    int fd = s_viewer_fd;
+    ESP_LOGW(TAG,
+             "viewer fd=%d no longer a WS client (info=%d) \u2014 "
+             "scheduling session close",
+             fd, (int)info);
+    ws_cams_trigger_close_and_clear();
+    return false;
 }
 
 static const cam_stream_sink_t s_server_sink = {
@@ -420,13 +462,12 @@ void ws_cams_on_sta_disconnected(void)
 {
     if (s_viewer_fd >= 0 || s_uri_registered) {
         int fd = s_viewer_fd;
-        s_viewer_fd     = -1;
-        s_uri_registered = false;
-        cam_stream_sink_install(NULL);
         ESP_LOGI(TAG,
-                 "STA disconnected: cleared viewer slot fd=%d, "
+                 "STA disconnected: clearing viewer slot fd=%d, "
                  "URI re-register on next IP-up",
                  fd);
+        ws_cams_trigger_close_and_clear();
+        s_uri_registered = false;
     }
 }
 
