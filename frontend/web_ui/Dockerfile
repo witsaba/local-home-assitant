@@ -38,8 +38,8 @@ RUN npm install -g pnpm@11.8.0
 
 # Copy only manifests first so Docker can cache the install layer
 # independently of source changes.
-COPY package.json pnpm-lock.yaml ./
-RUN pnpm install --frozen-lockfile
+COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
+RUN pnpm install
 
 # ----------------------------------------------------------------------------
 # build: produce dist/ (client) and server/ (SSR) artifacts. Skipped at
@@ -75,7 +75,7 @@ RUN apk add --no-cache wget
 # Re-install without devDependencies. We can't --frozen-lockfile here
 # because the lockfile describes the full tree; --prod reads it
 # correctly and only pulls runtime deps.
-COPY package.json pnpm-lock.yaml ./
+COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
 RUN pnpm install --prod
 
 # Copy built artefacts and any source files needed at runtime.
