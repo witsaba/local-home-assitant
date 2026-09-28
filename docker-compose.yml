@@ -1,9 +1,12 @@
 # Docker Compose for the witsaba local-home-assitant stack.
 #
-# Target: Linux only. On Docker Desktop (Mac/Windows) `network_mode: host`
-# puts the container on the VM's network, NOT the host's LAN. The
-# workers discovery job will not see devices like 192.168.1.51 from
-# Mac dev. Validation deferred to a Linux host.
+# Target: Linux native. On Docker Desktop (Mac/Windows) the Linux VM
+# inside Docker Desktop does not share the host's loopback with
+# `network_mode: host`, breaking postgres at 127.0.0.1.
+#
+# Mac users: use the bridge-network override instead:
+#   docker compose -f docker-compose.yml -f docker-compose.mac.yml up
+# See docker-compose.mac.yml for details and known limitations.
 #
 # Networking model:
 #   - network_mode: host on every service. All containers share the host

@@ -1,0 +1,178 @@
+# Docker Compose for Mac (Docker Desktop).
+#
+# This is a standalone file — do NOT combine with docker-compose.yml.
+# Use this file instead of the Linux compose file on Mac:
+#   docker compose -f docker-compose.mac.yml up
+#
+# Why standalone: docker-compose.yml uses `network_mode: host` which
+# cannot be overridden to bridge networking in a compose override file
+# (network_mode and networks are mutually exclusive). This file
+# re-expresses the full stack with bridge networking.
+#
+# Networking model:
+#   - Bridge network (witsaba-net) created by docker compose.
+#   - Containers communicate via service names (postgres, messaging-core).
+#   - Docker Desktop publishes ports to the Mac host via port mapping.
+#   - Postgres binds to 0.0.0.0 inside the container; Docker Desktop
+#     maps 5432 to the Mac host via the published port.
+#
+# Trade-off: workers see Docker's bridge network, not the Mac's LAN.
+# Device discovery (192.168.1.x) will not find real hardware on Mac.
+# For full LAN discovery, run the Linux compose file on a real Linux host.
+#
+# Postgres bootstrap: same as docker-compose.yml — see services/postgres/README.md.
+#
+# Env overrides: drop a .env file next to this file. Passwords have no defaults.
+# The same env.example from the repo root works — copy it to .env before running.
+
+name: witsaba-local-home-mac
+
+volumes:
+  witsaba-postgres-data:
+    # Named volume for /var/lib/postgresql/data. Persists across
+    # `docker compose down`. Removed only by `docker compose down -v`.
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16-trixie
+    container_name: witsaba-postgres
+    init: true
+    networks:
+      - witsaba-net
+    restart: unless-stopped
+    # Bind to all interfaces inside the container; Docker Desktop
+    # forwards the published port to the Mac host.
+    command:
+      - "postgres"
+      - "-c"
+      - "listen_addresses=0.0.0.0"
+    volumes:
+      - witsaba-postgres-data:/var/lib/postgresql/data
+      - ./services/postgres/init:/docker-entrypoint-initdb.d:ro
+      - ./services/postgres/scripts:/docker-entrypoint-scripts:ro
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-witsaba}
+      POSTGRES_USER: ${POSTGRES_USER:-pg-admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
+      PG_WORKER_PASSWORD: ${PG_WORKER_PASSWORD:?PG_WORKER_PASSWORD must be set in .env}
+      PG_MESSAGING_CORE_PASSWORD: ${PG_MESSAGING_CORE_PASSWORD:?PG_MESSAGING_CORE_PASSWORD must be set in .env}
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - "pg_isready -h postgres -p 5432 -U ${POSTGRES_USER:-pg-admin} -d ${POSTGRES_DB:-witsaba}"
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  messaging-core:
+    build:
+      context: ./services/messaging-core
+      dockerfile: Dockerfile
+      args:
+        VERSION: ${VERSION:-0.1.0-dev}
+        GIT_HEAD: ${GIT_HEAD:-unknown}
+    image: witsaba/messaging-core:local
+    container_name: witsaba-messaging-core
+    init: true
+    networks:
+      - witsaba-net
+    restart: unless-stopped
+    ports:
+      - "${NATS_PORT:-4222}:4222"
+      - "${STREAM_PORT:-8080}:8080"
+      - "${API_PORT:-8081}:8081"
+    environment:
+      # NATS_HOST: use the service name; Docker DNS resolves it
+      NATS_HOST: messaging-core
+      NATS_PORT: ${NATS_PORT:-4222}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      # Postgres: connect via service name on the bridge network
+      MESSAGING_CORE_PG_HOST: postgres
+      MESSAGING_CORE_PG_PORT: "5432"
+      MESSAGING_CORE_PG_DATABASE: ${MESSAGING_CORE_PG_DATABASE:-${POSTGRES_DB:-witsaba}}
+      MESSAGING_CORE_PG_USER: ${MESSAGING_CORE_PG_USER:-pg-messaging-core}
+      MESSAGING_CORE_PG_PASSWORD: ${PG_MESSAGING_CORE_PASSWORD:?PG_MESSAGING_CORE_PASSWORD must be set in .env}
+      MESSAGING_CORE_PG_MAX_CONNS: ${MESSAGING_CORE_PG_MAX_CONNS:-0}
+      MESSAGING_CORE_PG_MIN_CONNS: ${MESSAGING_CORE_PG_MIN_CONNS:-0}
+      MESSAGING_CORE_PG_MAX_CONN_LIFETIME: ${MESSAGING_CORE_PG_MAX_CONN_LIFETIME:-0}
+      MESSAGING_CORE_PG_MAX_CONN_IDLE_TIME: ${MESSAGING_CORE_PG_MAX_CONN_IDLE_TIME:-0}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  workers:
+    build:
+      context: ./services/workers
+      dockerfile: Dockerfile
+      args:
+        VERSION: ${VERSION:-0.1.0-dev}
+        GIT_HEAD: ${GIT_HEAD:-unknown}
+    image: witsaba/workers:local
+    container_name: witsaba-workers
+    init: true
+    networks:
+      - witsaba-net
+    restart: unless-stopped
+    depends_on:
+      messaging-core:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+    environment:
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      DISCOVERY_INTERVAL_SECONDS: ${DISCOVERY_INTERVAL_SECONDS:-60}
+      DISCOVERY_PROBE_TIMEOUT_MS: ${DISCOVERY_PROBE_TIMEOUT_MS:-1500}
+      DISCOVERY_WORKER_POOL_SIZE: ${DISCOVERY_WORKER_POOL_SIZE:-64}
+      # NATS: connect via service name on the bridge network
+      NATS_HOST: messaging-core
+      NATS_PORT: ${NATS_PORT:-4222}
+      # Postgres: connect via service name on the bridge network
+      PG_HOST: postgres
+      PG_PORT: "5432"
+      PG_DATABASE: ${PG_DATABASE:-${POSTGRES_DB:-witsaba}}
+      PG_USER: ${PG_USER:-pg-worker}
+      PG_WORKER_PASSWORD: ${PG_WORKER_PASSWORD:?PG_WORKER_PASSWORD must be set in .env}
+
+  web_ui:
+    build:
+      context: ./frontend/web_ui
+      dockerfile: Dockerfile
+      args:
+        VERSION: ${VERSION:-0.1.0-dev}
+        GIT_HEAD: ${GIT_HEAD:-unknown}
+    image: witsaba/web-ui:local
+    container_name: witsaba-web-ui
+    init: true
+    networks:
+      - witsaba-net
+    restart: unless-stopped
+    ports:
+      - "5173:5173"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: development
+      HOST: 0.0.0.0
+      PORT: 5173
+      # Postgres: connect via service name on the bridge network
+      PG_HOST: postgres
+      PG_PORT: "5432"
+      PG_DATABASE: ${PG_DATABASE:-${POSTGRES_DB:-witsaba}}
+      PG_USER: ${PG_USER:-pg-worker}
+      PG_PASSWORD: ${PG_WORKER_PASSWORD:?PG_WORKER_PASSWORD must be set in .env}
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - "wget -qO- http://127.0.0.1:5173/ >/dev/null 2>&1 || exit 1"
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+networks:
+  witsaba-net:
+    driver: bridge
