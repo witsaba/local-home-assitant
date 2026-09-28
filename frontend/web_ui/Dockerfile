@@ -72,9 +72,10 @@ RUN npm install -g pnpm@11.8.0
 # not ship it, and we want a small, deterministic install.
 RUN apk add --no-cache wget
 
-# node_modules are pre-installed in the `build` stage. Copy them
-# directly to avoid a second `pnpm install` call that downloads
-# everything again from npmjs.org (slow on constrained networks).
+# Copy manifest files so pnpm can read scripts from package.json.
+# Do NOT run pnpm install here - node_modules is already in the build
+# stage and copied below. This avoids network calls to npmjs.org.
+COPY --from=build /app/package.json /app/pnpm-workspace.yaml /app/pnpm-lock.yaml ./
 
 # Copy built artefacts and node_modules from the build stage.
 # Note: there is intentionally no `server/` copy. Qwik only emits a
