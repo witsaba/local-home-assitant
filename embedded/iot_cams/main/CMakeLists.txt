@@ -7,5 +7,5 @@
 idf_component_register(
     SRCS "iot_cams.c"
     INCLUDE_DIRS "."
-    REQUIRES provisioning cam_reader
+    REQUIRES provisioning cam_reader cam_stream
 )
