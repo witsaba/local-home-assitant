@@ -52,6 +52,7 @@
 #include "esp_wifi.h"
 
 #include "cam_reader.h"
+#include "ws_cams.h"
 
 static const char *TAG = "sta_srv";
 
@@ -260,7 +261,23 @@ esp_err_t sta_server_start(void)
         return err;
     }
 
-    ESP_LOGI(TAG, "STA server running on port 80, /whoami and /capture registered");
+    /* W4 (feat/iot-cams-ws-cams-endpoint) — register the
+     * WebSocket endpoint for live JPEG streaming. Same httpd
+     * handle, same audience (post-provisioning LAN clients).
+     * The handler currently accepts handshakes and captures
+     * the fd; the live sink install lands in W5. */
+    err = ws_cams_register_uri(s_sta_httpd);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "register /ws/cams failed: %s",
+                 esp_err_to_name(err));
+        httpd_stop(s_sta_httpd);
+        s_sta_httpd = NULL;
+        return err;
+    }
+
+    ESP_LOGI(TAG,
+             "STA server running on port 80 "
+             "(/whoami, /capture, /ws/cams registered)");
     return ESP_OK;
 }
 

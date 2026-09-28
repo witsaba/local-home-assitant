@@ -81,9 +81,19 @@ CONFIG_SPIRAM_MODE_QUAD=y
 CONFIG_SPIRAM_SPEED_40M=y
 CONFIG_SPIRAM_USE_MALLOC=y
 
-# === Partition table ===
+# === HTTP server: WebSocket support ===
 #
-# Custom 1.5 MB factory partition, declared in `partitions.csv`.
+# Required by the /ws/cams endpoint (W4 of
+# feat/iot-cams-ws-cams-endpoint). ESP-IDF v5.5 ships the WS
+# APIs in esp_http_server behind CONFIG_HTTPD_WS_SUPPORT; the
+# default is OFF. With this on, httpd_uri_t gains
+# `.is_websocket` and the httpd_ws_* family is exposed
+# (httpd_ws_send_frame_async, httpd_ws_recv_frame,
+# httpd_ws_client_info_t, etc.). The WS protocol stack itself
+# (~6 KB flash) is only linked when this is on.
+CONFIG_HTTPD_WS_SUPPORT=y
+
+# === Partition table ===
 # The IDF v5.5 default (single 1 MB factory) leaves the firmware
 # at 99% full once PSRAM is enabled — `app_check_size` prints
 # a "1% free" warning. 1.5 MB matches `esp32-cam-surveillance`'s
