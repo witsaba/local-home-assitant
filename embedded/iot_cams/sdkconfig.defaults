@@ -93,6 +93,17 @@ CONFIG_SPIRAM_USE_MALLOC=y
 # (~6 KB flash) is only linked when this is on.
 CONFIG_HTTPD_WS_SUPPORT=y
 
+# === /ws/cams stream endpoint (W8) ===
+#
+# Mirrored from components/provisioning/Kconfig.projbuild.
+# Change either one and re-run `idf.py reconfigure` to align
+# the runtime config.
+CONFIG_FIRMWARE_STREAM_FPS_DEFAULT=10
+CONFIG_FIRMWARE_STREAM_FPS_MIN=1
+CONFIG_FIRMWARE_STREAM_FPS_MAX=25
+CONFIG_FIRMWARE_WS_PATH="/ws/cams"
+CONFIG_FIRMWARE_WS_STATUS_PERIOD_MS=30000
+
 # === Partition table ===
 # The IDF v5.5 default (single 1 MB factory) leaves the firmware
 # at 99% full once PSRAM is enabled — `app_check_size` prints

@@ -102,13 +102,16 @@ esp_err_t cam_stream_sink_send_text(const char *buf, size_t len);
 uint32_t cam_stream_frames_sent_get(void);
 uint32_t cam_stream_frames_dropped_get(void);
 
-/** Stream-task default period, derived from a build-time
- *  constant until W8 wires CONFIG_FIRMWARE_STREAM_FPS_DEFAULT
- *  through Kconfig. Surfaced as a macro so the loop task and
- *  any external pacing logic (W3 hello+status timers) agree
- *  on the same period without a runtime indirection. */
-#ifndef CAM_STREAM_PERIOD_MS
-#define CAM_STREAM_PERIOD_MS 100  /* 10 FPS default */
+/** Stream-task default period, derived from the
+ *  CONFIG_FIRMWARE_STREAM_FPS_DEFAULT Kconfig knob in
+ *  provisioning/Kconfig.projbuild (mirrored in
+ *  sdkconfig.defaults). Surfaced as a macro so the loop task
+ *  and any external pacing logic agree on the same period
+ *  without a runtime indirection. */
+#ifdef CONFIG_FIRMWARE_STREAM_FPS_DEFAULT
+#define CAM_STREAM_PERIOD_MS (1000 / CONFIG_FIRMWARE_STREAM_FPS_DEFAULT)
+#else
+#define CAM_STREAM_PERIOD_MS 100  /* 10 FPS fallback */
 #endif
 
 /* ---------- W3 — JSON text-frame payload schemas ----------

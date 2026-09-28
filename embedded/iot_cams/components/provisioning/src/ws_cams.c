@@ -55,8 +55,12 @@
 
 #define TAG "ws_cams"
 
-/* W4 path hard-coded; W8 routes through CONFIG_FIRMWARE_WS_PATH. */
-#define WS_CAMS_URI_PATH "/ws/cams"
+/* W8 — the WS path is a Kconfig symbol (mirrored from
+ * provisioning/Kconfig.projbuild → sdkconfig.defaults).
+ * Rejecting Mac substrings per the surveillance REQ-WS-001. */
+#ifndef CONFIG_FIRMWARE_WS_PATH
+#define CONFIG_FIRMWARE_WS_PATH "/ws/cams"
+#endif
 
 /* Hello + status builders (W3) live in cam_stream_wire.c so the
  * upstream provider can own the schema. */
@@ -340,7 +344,7 @@ esp_err_t ws_cams_register_uri(httpd_handle_t hd)
     }
 
     static const httpd_uri_t ws_uri = {
-        .uri          = WS_CAMS_URI_PATH,
+        .uri          = CONFIG_FIRMWARE_WS_PATH,
         .method       = HTTP_GET,
         .handler      = ws_cams_handler,
         .user_ctx     = NULL,
@@ -349,11 +353,12 @@ esp_err_t ws_cams_register_uri(httpd_handle_t hd)
     esp_err_t r = httpd_register_uri_handler(hd, (httpd_uri_t *)&ws_uri);
     if (r != ESP_OK) {
         ESP_LOGE(TAG, "register %s failed: %s",
-                 WS_CAMS_URI_PATH, esp_err_to_name(r));
+                 CONFIG_FIRMWARE_WS_PATH, esp_err_to_name(r));
         return r;
     }
     s_uri_registered = true;
-    ESP_LOGI(TAG, "%s registered (is_websocket=true)", WS_CAMS_URI_PATH);
+    ESP_LOGI(TAG, "%s registered (is_websocket=true)",
+             CONFIG_FIRMWARE_WS_PATH);
     return ESP_OK;
 }
 
