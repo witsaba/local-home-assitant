@@ -21,7 +21,7 @@
 # stage or a separate Dockerfile.prod with the chosen adapter. Out of
 # scope for the current scaffold.
 
-ARG NODE_VERSION=22.11.0
+ARG NODE_VERSION=22.13.0
 
 # ----------------------------------------------------------------------------
 # deps: install the full dev dep tree once. Reused by build and runtime stages
