@@ -1,6 +1,6 @@
 {
-  "name": "my-qwik-empty-starter",
-  "description": "Blank project with routing included",
+  "name": "witsaba-web-ui",
+  "description": "Witsaba local-home-assistant web UI (Qwik + Qwik City)",
   "engines": {
     "node": "^18.17.0 || ^20.3.0 || >=21.0.0"
   },
@@ -20,7 +20,10 @@
     "lint": "eslint \"src/**/*.ts*\"",
     "preview": "qwik build preview && vite preview --open",
     "start": "vite --open --mode ssr",
-    "qwik": "qwik"
+    "qwik": "qwik",
+    "test": "vitest run",
+    "test.watch": "vitest",
+    "test.coverage": "vitest run --coverage"
   },
   "devDependencies": {
     "@builder.io/qwik": "^1.20.1",
@@ -36,6 +39,9 @@
     "typescript-plugin-css-modules": "latest",
     "undici": "*",
     "vite": "7.3.1",
-    "vite-tsconfig-paths": "^4.2.1"
+    "vite-tsconfig-paths": "^4.2.1",
+    "vitest": "^2.1.9",
+    "@vitest/coverage-v8": "^2.1.9",
+    "jsdom": "^25.0.1"
   }
 }

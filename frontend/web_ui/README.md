@@ -1,65 +1,73 @@
-# Qwik City App ⚡️
+# witsaba-web-ui
 
-- [Qwik Docs](https://qwik.dev/)
-- [Discord](https://qwik.dev/chat)
-- [Qwik GitHub](https://github.com/QwikDev/qwik)
-- [@QwikDev](https://twitter.com/QwikDev)
-- [Vite](https://vitejs.dev/)
+Front-end for the [witsaba local-home-assistant](../..) stack.
 
----
+Qwik + Qwik City, scaffolded with the official `empty` starter.
+The repo is intentionally minimal: one home route, one placeholder
+component (`SkeletonCard`), and a Vitest config wired up for the
+official `@builder.io/qwik/testing` layer.
 
-## Project Structure
+## Stack
 
-This project is using Qwik with [QwikCity](https://qwik.dev/qwikcity/overview/). QwikCity is just an extra set of tools on top of Qwik to make it easier to build a full site, including directory-based routing, layouts, and more.
+- **Qwik / Qwik City** — resumable UI, server-rendered first.
+- **Vite 7** — Qwik's build pipeline.
+- **Vitest + jsdom** — unit / component tests, official Qwik testing API.
+- **pnpm** — package manager (Linux/macOS/Windows arm64 supported).
+- **Node.js 18.17+** — required at build and run time.
 
-Inside your project, you'll see the following directory structure:
+## Scripts
 
-```
-├── public/
-│   └── ...
-└── src/
-    ├── components/
-    │   └── ...
-    └── routes/
-        └── ...
-```
-
-- `src/routes`: Provides the directory-based routing, which can include a hierarchy of `layout.tsx` layout files, and an `index.tsx` file as the page. Additionally, `index.ts` files are endpoints. Please see the [routing docs](https://qwik.dev/qwikcity/routing/overview/) for more info.
-
-- `src/components`: Recommended directory for components.
-
-- `public`: Any static assets, like images, can be placed in the public directory. Please see the [Vite public directory](https://vitejs.dev/guide/assets.html#the-public-directory) for more info.
-
-## Add Integrations and deployment
-
-Use the `pnpm qwik add` command to add additional integrations. Some examples of integrations includes: Cloudflare, Netlify or Express Server, and the [Static Site Generator (SSG)](https://qwik.dev/qwikcity/guides/static-site-generation/).
-
-```shell
-pnpm qwik add # or `pnpm qwik add`
+```sh
+pnpm install                  # install dependencies
+pnpm dev                      # vite dev server (SSR mode)
+pnpm build                    # production build (dist/ + server/)
+pnpm preview                  # build + serve the production preview
+pnpm test                     # one-shot vitest run
+pnpm test.watch               # vitest watch mode
+pnpm test.coverage            # vitest with v8 coverage
+pnpm lint                     # eslint
+pnpm fmt                      # prettier --write
 ```
 
-## Development
+## Layout
 
-Development mode uses [Vite's development server](https://vitejs.dev/). The `dev` command will server-side render (SSR) the output during development.
-
-```shell
-npm start # or `pnpm start`
+```
+frontend/web_ui/
+├── src/
+│   ├── components/
+│   │   └── skeleton-card/    # placeholder card used on the home page
+│   ├── routes/
+│   │   └── index.tsx         # the only route — home page wireframe
+│   ├── entry.dev.tsx         # dev-mode entry
+│   ├── entry.preview.tsx     # `vite preview` entry
+│   ├── entry.ssr.tsx         # SSR entry (used by build + adapter)
+│   ├── root.tsx              # <html>/<head>/<body> shell
+│   └── global.css            # base reset + design tokens (placeholder)
+├── public/                   # static assets served as-is
+├── vite.config.ts            # Vite + Qwik plugins
+├── vitest.config.ts          # separate Vitest config (per Qwik docs)
+└── package.json
 ```
 
-> Note: during dev mode, Vite may request a significant number of `.js` files. This does not represent a Qwik production build.
+## Docker
 
-## Preview
+This service is wired into the **root** `docker-compose.yml` as
+`web_ui`. The container:
 
-The preview command will create a production build of the client modules, a production build of `src/entry.preview.tsx`, and run a local server. The preview server is only for convenience to preview a production build locally and should not be used as a production server.
+- listens on the host network on port `5173` (dev) / `4173` (preview),
+- `depends_on: postgres: condition: service_healthy` — the UI never
+  starts before Postgres is accepting connections.
 
-```shell
-pnpm preview # or `pnpm preview`
-```
+See the [top-level `docker-compose.yml`](../../docker-compose.yml) and
+[`odd/tasks/qwik-web-ui-scaffold.md`](../../odd/tasks/qwik-web-ui-scaffold.md)
+for the full integration plan.
 
-## Production
+## Notes
 
-The production build will generate client and server modules by running both client and server build commands. The build command will use Typescript to run a type check on the source code.
-
-```shell
-pnpm build # or `pnpm build`
-```
+- This is a **skeleton**, not a finished product. The `SkeletonCard`
+  action buttons are intentionally `disabled` until a real feature
+  wires them up.
+- The design system is **not** chosen yet. Tailwind, UnoCSS, and
+  vanilla-extract are all options; that decision is a separate task.
+- Bun is **not** used as the runtime — the Qwik Bun adapter has known
+  `routeAction$` bugs. pnpm + Node is the supported path.
