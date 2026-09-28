@@ -15,11 +15,11 @@ Add a `GET /api/devices/active` REST endpoint to `messaging-core` that returns d
 
 ## Tasks
 
-- [ ] **T1** Add `ListActive(ctx, maxAge) ([]*Device, error)` to `devices.DeviceRepository` interface and `devices.Pgx` implementation
-- [ ] **T2** Wire `net/http` server + `GET /api/devices/active` handler into `messaging-core main.go`; add `API_PORT` env var (default 8081)
-- [ ] **T3** Add unit tests for `ListActive` (store test with fake Querier) and HTTP handler
-- [ ] **T4** Create `frontend/web_ui/src/routes/devices/index.tsx` — fetches `/api/devices/active`, renders device cards
-- [ ] **T5** Update `env.example` with `API_PORT`; update `messaging-core/README.md`
+- [x] **T1** Add `ListActive(ctx, maxAge) ([]*Device, error)` to `devices.DeviceRepository` interface and `devices.Pgx` implementation
+- [x] **T2** Wire `net/http` server + `GET /api/devices/active` handler into `messaging-core main.go`; add `API_PORT` env var (default 8081)
+- [x] **T3** Add unit tests for `ListActive` (store test with fake Querier) and HTTP handler
+- [x] **T4** Create `frontend/web_ui/src/routes/devices/index.tsx` — fetches `/api/devices/active`, renders device cards
+- [x] **T5** Update `env.example` with `API_PORT`; update `messaging-core/README.md`
 
 ## Tech decisions
 - HTTP server is separate stdlib `net/http` mux (not chi/gin — keep deps minimal)
@@ -29,8 +29,8 @@ Add a `GET /api/devices/active` REST endpoint to `messaging-core` that returns d
 - Frontend uses Qwik's `routeLoader$` for SSR-fetch, graceful error state in component
 
 ## Commit plan
-1. `feat(devices): add ListActive to repository interface + Pgx implementation`
-2. `feat(api): wire HTTP server + GET /api/devices/active into messaging-core`
-3. `test(devices): add unit tests for ListActive and HTTP handler`
-4. `feat(ui): add /devices route page fetching from API`
-5. `docs: document API_PORT in env.example and messaging-core README`
+1. `feat(devices): add ListActive to repository interface + Pgx implementation` — f4e91ad
+2. `feat(api): wire HTTP server + GET /api/devices/active into messaging-core` — f4e91ad
+3. `test(devices): add unit tests for ListActive and HTTP handler` — f4e91ad
+4. `feat(ui): add /devices route page fetching from API` — cc00eee
+5. `docs: document API_PORT in env.example and messaging-core README` — f4e91ad
