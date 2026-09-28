@@ -30,10 +30,11 @@ ARG NODE_VERSION=22.11.0
 FROM node:${NODE_VERSION}-alpine AS deps
 WORKDIR /app
 
-# pnpm via corepack (officially recommended for Node 22+).
+# pnpm installed via npm (corepack has outdated keys that fail signature
+# verification for pnpm >= 9 in node:22-alpine images).
 ENV PNPM_HOME=/pnpm
 ENV PATH=$PNPM_HOME:$PATH
-RUN corepack enable && corepack prepare pnpm@11.8.0 --activate
+RUN npm install -g pnpm@11.8.0
 
 # Copy only manifests first so Docker can cache the install layer
 # independently of source changes.
@@ -65,7 +66,7 @@ ENV PATH=$PNPM_HOME:$PATH
 ENV HOST=0.0.0.0
 ENV PORT=5173
 
-RUN corepack enable && corepack prepare pnpm@11.8.0 --activate
+RUN npm install -g pnpm@11.8.0
 
 # wget is used by the docker compose healthcheck. node:22-alpine does
 # not ship it, and we want a small, deterministic install.
