@@ -56,6 +56,17 @@ static const char *TAG = "cam-reader";
 #define CAM_FB_COUNT_PSRAM 2
 #define CAM_FB_COUNT_NOMEM 1
 
+/* The AI-Thinker ESP32-CAM ships with the OV2640 sensor mounted
+ * such that the raw frame is vertically inverted — without
+ * `set_vflip(sensor, 1)` the top of the scene lands at the
+ * bottom of the JPEG. Operator-confirmed on hardware after the
+ * first /capture flash. Flip once at init.
+ *
+ * Bump this constant to 0 only if a different physical mount
+ * (camera flipped 180 deg) lands on the AI-Thinker board; the
+ * default matches the stock enclosure. */
+#define CAM_READER_VFLIP  1
+
 /* Mutex wait budget for a single capture. The reference uses
  * 5 s; we mirror that as an executable contract. */
 #define CAM_READER_WAIT_MS 5000
@@ -131,6 +142,27 @@ esp_err_t cam_reader_init(void)
         vSemaphoreDelete(s_cam_mutex);
         s_cam_mutex = NULL;
         return err;
+    }
+
+    /* Board-mounted orientation fix. The AI-Thinker ESP32-CAM
+     * ships with the sensor vertically inverted, so the raw
+     * frame appears upside-down in the JPEG output. Apply the
+     * flip once at boot — it's a per-board property, not a
+     * per-request property — and trust the sensor driver to
+     * pick the cleanest sensor implementation registered for
+     * the connected module (here always OV2640 on AI-Thinker). */
+    sensor_t *sensor = esp_camera_sensor_get();
+    if (sensor != NULL && sensor->set_vflip != NULL) {
+        int rc = sensor->set_vflip(sensor, CAM_READER_VFLIP);
+        if (rc != 0) {
+            ESP_LOGW(TAG, "init: sensor->set_vflip returned %d", rc);
+        } else {
+            ESP_LOGI(TAG, "init: vflip=%d (board orientation)",
+                     (int)CAM_READER_VFLIP);
+        }
+    } else {
+        ESP_LOGW(TAG, "init: sensor has no set_vflip; "
+                      "image may be upside-down");
     }
 
     ESP_LOGI(TAG, "init: camera ready (SVGA 800x600, JPEG quality %d)",
