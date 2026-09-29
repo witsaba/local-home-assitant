@@ -398,32 +398,70 @@ WITSABA_NODE_MIN_MINOR=19
 WITSABA_NODE_MIN_VERSION="22.19.0"
 
 setup_node_env() {
-    local prefix_bin
-    if command -v brew >/dev/null 2>&1; then
-        prefix_bin="$(brew --prefix 2>/dev/null)/opt/${WITSABA_NODE_FORMULA}/bin"
-    fi
+    local prefix_bin=""
+    local candidate
 
-    if [ -n "$prefix_bin" ] && [ -x "$prefix_bin/node" ]; then
-        export PATH="$prefix_bin:$PATH"
+    # Do not rely on `command -v brew`: this runs in contexts where brew is not
+    # on PATH yet (a bare `bash -c '. ./_lib.sh; setup_node_env'`), and a
+    # silent fallback to whatever node happens to exist is how you end up
+    # building with the wrong interpreter and no error.
+    for candidate in \
+        "$(command -v brew 2>/dev/null || true)/opt/${WITSABA_NODE_FORMULA}/bin" \
+        "/home/linuxbrew/.linuxbrew/opt/${WITSABA_NODE_FORMULA}/bin" \
+        "$HOME/.linuxbrew/opt/${WITSABA_NODE_FORMULA}/bin" \
+        "$HOME/.brew/opt/${WITSABA_NODE_FORMULA}/bin"; do
+        if [ -n "$candidate" ] && [ -x "$candidate/node" ]; then
+            prefix_bin="$candidate"
+            break
+        fi
+    done
+
+    if [ -n "$prefix_bin" ]; then
         NODE_BIN="$prefix_bin/node"
-        # pnpm lives next to the node it was installed against when it came
-        # from that keg, but a global npm install may have put it in brew/bin.
+        # Put the intended interpreter FIRST. Order matters absolutely: pnpm
+        # is a standalone ELF binary with no node shebang, and it launches
+        # vite by resolving `node` from PATH. If brew/bin sits ahead of
+        # opt/node@22/bin, `node` is v20 and the build dies inside undici
+        # even though NODE_BIN is correct.
+        PATH="$prefix_bin:$PATH"; export PATH
+
+        # pnpm may sit beside this node, or in brew/bin if it came from a
+        # global npm install. Resolve it by absolute path; never reorder PATH
+        # to promote pnpm's own directory ahead of the node directory.
         if [ -x "$prefix_bin/pnpm" ]; then
             PNPM_BIN="$prefix_bin/pnpm"
         else
-            PNPM_BIN="$(command -v pnpm 2>/dev/null || echo "$prefix_bin/pnpm")"
+            PNPM_BIN=""
+            for candidate in \
+                "$(command -v pnpm 2>/dev/null || true)" \
+                "$prefix_bin/pnpm" \
+                "$HOME/.local/share/pnpm/pnpm" \
+                "/home/linuxbrew/.linuxbrew/bin/pnpm" \
+                "$HOME/.linuxbrew/bin/pnpm"; do
+                if [ -n "$candidate" ] && [ -x "$candidate" ]; then
+                    PNPM_BIN="$candidate"
+                    break
+                fi
+            done
         fi
+        [ -n "$PNPM_BIN" ] || PNPM_BIN="pnpm"
     else
+        log_warn "$WITSABA_NODE_FORMULA not found; falling back to node on PATH"
         NODE_BIN="$(command -v node 2>/dev/null || echo node)"
         PNPM_BIN="$(command -v pnpm 2>/dev/null || echo pnpm)"
     fi
 
     export NODE_BIN PNPM_BIN
-    # pnpm must run under the same node it is meant to run under.
-    if [ -x "$PNPM_BIN" ]; then
-        PATH="$(dirname "$PNPM_BIN"):$PATH"; export PATH
-    fi
     return 0
+}
+
+# Assert the invariant the whole toolchain depends on: `node` on PATH is the
+# interpreter we resolved. If these ever diverge, pnpm launches vite under a
+# different runtime than the one 03-node.sh installed and verified.
+node_path_matches_node_bin() {
+    local on_path
+    on_path="$(command -v node 2>/dev/null || true)"
+    [ -n "$on_path" ] && [ "$on_path" = "$NODE_BIN" ]
 }
 
 node_bin() { printf '%s' "${NODE_BIN:-$(command -v node 2>/dev/null || echo node)}"; }
@@ -448,22 +486,35 @@ preflight_node() {
 
     if node_version_ok; then
         log_ok "node $v ($NODE_BIN)"
-        return 0
+    else
+        log_err "node $v is too old for this project"
+        log_err ""
+        log_err "undici@8.11.2, required by @builder.io/qwik-city@1.19.2, declares"
+        log_err "engines.node >= ${WITSABA_NODE_MIN_VERSION} and calls"
+        log_err "webidl.util.markAsUncloneable while loading. vite.config.ts pulls"
+        log_err "that chain in, so 'vite build' fails during config load."
+        log_err ""
+        log_err "Node 20 will not work. Install and select a supported version:"
+        log_err "  brew install ${WITSABA_NODE_FORMULA}"
+        log_err ""
+        log_err "Reference: frontend/web_ui/Dockerfile pins 22.13.0, which is also"
+        log_err "below that floor, so the container build has the same problem."
+        return 1
     fi
 
-    log_err "node $v is too old for this project"
-    log_err ""
-    log_err "undici@8.11.2, required by @builder.io/qwik-city@1.19.2, declares"
-    log_err "engines.node >= ${WITSABA_NODE_MIN_VERSION} and calls"
-    log_err "webidl.util.markAsUncloneable while loading. vite.config.ts pulls"
-    log_err "that chain in, so 'vite build' fails during config load."
-    log_err ""
-    log_err "Node 20 will not work. Install and select a supported version:"
-    log_err "  brew install ${WITSABA_NODE_FORMULA}"
-    log_err ""
-    log_err "Reference: frontend/web_ui/Dockerfile pins 22.13.0, which is also"
-    log_err "below that floor, so the container build has the same problem."
-    return 1
+    # The version check above inspects $NODE_BIN directly and would pass even
+    # if `node` on PATH is a different, older runtime. That exact split is what
+    # let the build fail inside undici while the preflight reported success.
+    if ! node_path_matches_node_bin; then
+        log_err "PATH lookup resolves a different node than \$NODE_BIN"
+        log_err "  \$NODE_BIN          : $NODE_BIN ($v)"
+        log_err "  command -v node    : $(command -v node 2>/dev/null || echo 'not found') ($(command -v node >/dev/null 2>&1 && node --version || echo '?'))"
+        log_err "pnpm is a standalone binary that launches vite using whichever"
+        log_err "node is first on PATH, so this mismatch builds with the wrong runtime."
+        return 1
+    fi
+
+    return 0
 }
 
 # -----------------------------------------------------------------------------
