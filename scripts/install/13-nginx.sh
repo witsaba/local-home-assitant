@@ -220,7 +220,11 @@ cat << CONF_MID
         }
 
         location / {
-            try_files \$uri \$uri/ =404;
+            # Clean URLs: /devices must resolve to devices.html on disk.
+            # '$uri $uri/' alone returns 404, because the file has the
+            # extension. '$uri.html' is tried before the directory form so a
+            # page always wins over a same-named directory.
+            try_files \$uri \$uri.html \$uri/ =404;
         }
 
         location = /favicon.svg {

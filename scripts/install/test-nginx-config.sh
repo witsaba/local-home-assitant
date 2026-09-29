@@ -128,6 +128,14 @@ else
         bad "missing WebSocket upgrade headers"
     fi
 
+    # Clean URLs: a request for /devices has to reach devices.html on disk.
+    # try_files without '$uri.html' 404s, because the file carries an extension.
+    if grep -q 'try_files .*\$uri\.html' "$NGINX_CONF"; then
+        ok "try_files maps extensionless URLs to .html files"
+    else
+        bad "try_files lacks \$uri.html; /devices will 404"
+    fi
+
     if grep -q 'proxy_buffering off' "$NGINX_CONF"; then
         ok "proxy_buffering off (frames are not held back)"
     else
@@ -163,6 +171,27 @@ else
         *"Devices"*) ok "GET /devices serves the device list" ;;
         *) bad "GET /devices did not return the device page" ;;
     esac
+
+    # Both the clean URL and the explicit file must work.
+    clean=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 \
+        "http://127.0.0.1:$LISTEN_PORT/devices")
+    explicit=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 \
+        "http://127.0.0.1:$LISTEN_PORT/devices.html")
+    if [ "$clean" = "200" ] && [ "$explicit" = "200" ]; then
+        ok "both /devices and /devices.html resolve (HTTP 200)"
+    else
+        bad "clean URL returned $clean, explicit returned $explicit"
+    fi
+
+    # A missing asset must 404 rather than silently serving the shell, which
+    # would produce a confusing MIME error in the browser.
+    missing=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 \
+        "http://127.0.0.1:$LISTEN_PORT/assets/nope.js")
+    if [ "$missing" = "404" ]; then
+        ok "missing asset returns 404"
+    else
+        bad "missing asset returned $missing, expected 404"
+    fi
 
     # Content-Type matters: a stylesheet served as text/plain is ignored.
     ctype=$(curl -s -o /dev/null -w '%{content_type}' --max-time 5 \
