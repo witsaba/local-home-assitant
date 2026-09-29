@@ -10,6 +10,11 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Shared helpers: available_mem_mb, gen_secret, run_progress, ...
+if [ -f "$SCRIPT_DIR/_lib.sh" ]; then
+    . "$SCRIPT_DIR/_lib.sh"
+fi
+
 # Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -80,24 +85,58 @@ if [ "$SKIP_BUILD" = false ]; then
     echo "                    BUILD PHASE"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo ""
-    log_info "Building witsaba services from source..."
-    log_info "Make sure you have cloned the repository:"
-    echo ""
-    echo "  cd ~/repositories"
-    echo "  git clone <your-repo-url> witsaba"
-    echo ""
-    
+
+    # A cold build of the Go dependency tree does not fit in 1GB of RAM. The
+    # two heavy packages (ugorji/go/codec ~446MB RSS and
+    # nats-io/nats-server/v2/server ~185MB) push the build into SD-card swap,
+    # where it spends most of its wall clock in iowait rather than on the CPU.
+    #
+    # Rather than let the operator discover that after 20 minutes, detect a
+    # low-memory host and tell them what to do instead.
+    MEM_MB=$(available_mem_mb || echo 0)
+    if [ "${MEM_MB:-0}" -lt 1400 ] 2>/dev/null; then
+        log_warn "only ${MEM_MB} MB RAM available"
+        log_warn "building the Go services here will thrash on SD-card swap"
+        log_warn ""
+        log_warn "Recommended: cross-compile on a workstation, then copy the binaries."
+        log_warn ""
+        log_warn "  # on the workstation"
+        log_warn "  ./scripts/install/10-build-go.sh --target arm64 --out ./build"
+        log_warn ""
+        log_warn "  # copy them over"
+        log_warn "  scp ./build/messaging-core ./build/workers \\"
+        log_warn "      $(id -un)@192.168.1.115:~/.witsaba/bin/"
+        log_warn ""
+        log_warn "Set WITSABA_SKIP_GO_BUILD=1 to build the frontend only and come"
+        log_warn "back to this step after the binaries are in place."
+        echo ""
+        SKIP_GO_BUILD=true
+    else
+        SKIP_GO_BUILD=false
+    fi
+    if [ "${WITSABA_SKIP_GO_BUILD:-0}" = "1" ]; then
+        SKIP_GO_BUILD=true
+    fi
+
     for step in "${BUILD_STEPS[@]}"; do
         script=$(echo "$step" | cut -d: -f1)
         name=$(echo "$step" | cut -d: -f2)
-        
+
+        if [ "$SKIP_GO_BUILD" = true ] && [ "$script" = "10-build-go.sh" ]; then
+            echo ""
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            log_step "Skipped: $name (low memory, cross-compile instead)"
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            continue
+        fi
+
         echo ""
         echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         log_step "Running: $name"
         echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        
+
         bash "$SCRIPT_DIR/$script"
-        
+
         if [ $? -ne 0 ]; then
             log_err "Step failed: $name"
             exit 1
