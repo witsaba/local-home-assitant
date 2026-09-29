@@ -29,36 +29,66 @@ echo "  Step 0: Homebrew Check"
 echo "=============================================="
 echo ""
 
-# Check if brew is installed
-if command -v brew &> /dev/null; then
-    log_ok "Homebrew is already installed: $(brew --version | head -1)"
+# =============================================================================
+# STEP 1: Find Homebrew in common locations
+# =============================================================================
+BREW_FOUND=false
+BREW_BIN=""
+BREW_PREFIX=""
+
+# Common Homebrew installation paths
+BREW_PATHS=(
+    "/home/linuxbrew/.linuxbrew/bin/brew"
+    "$HOME/.linuxbrew/bin/brew"
+    "$HOME/.brew/bin/brew"
+    "/usr/local/bin/brew"
+)
+
+for path in "${BREW_PATHS[@]}"; do
+    if [ -f "$path" ]; then
+        BREW_FOUND=true
+        BREW_BIN="$path"
+        BREW_PREFIX="$(dirname "$(dirname "$path")")"
+        break
+    fi
+done
+
+# If found, set up PATH for this session
+if [ "$BREW_FOUND" = true ]; then
+    export HOMEBREW_PREFIX="$BREW_PREFIX"
+    export PATH="$BREW_PREFIX/bin:$PATH"
     
-    # Set PATH for current session (important for running scripts in sequence)
-    export HOMEBREW_PREFIX="/home/linuxbrew/.linuxbrew"
-    export PATH="/home/linuxbrew/.linuxbrew/bin:$PATH"
-    eval "$(brew --env 2>/dev/null)" 2>/dev/null || true
+    # Source brew environment
+    eval "$($BREW_BIN --env 2>/dev/null)" 2>/dev/null || true
     
-    # Ensure brew is in PATH for future sessions
-    if ! grep -q 'HOMEBREW_PREFIX' ~/.bashrc 2>/dev/null; then
+    log_ok "Homebrew found at: $BREW_BIN"
+    
+    # Update Homebrew
+    log_info "Updating Homebrew..."
+    if ! $BREW_BIN update --quiet 2>/dev/null; then
+        log_warn "brew update failed, continuing anyway..."
+    fi
+    
+    log_ok "Homebrew version: $($BREW_BIN --version | head -1)"
+    
+    # Ensure brew is in ~/.bashrc for future sessions
+    if ! grep -q 'HOMEBREW_PREFIX' "$HOME/.bashrc" 2>/dev/null; then
         log_info "Adding Homebrew to ~/.bashrc..."
-        cat >> ~/.bashrc << 'BASHRC_EOF'
+        cat >> "$HOME/.bashrc" << 'BASHRC_EOF'
 
 # Homebrew
 export HOMEBREW_PREFIX="/home/linuxbrew/.linuxbrew"
 export PATH="/home/linuxbrew/.linuxbrew/bin:$PATH"
-eval "$(/home/linuxbrew/.linuxbrew/bin/brew --env 2>/dev/null)" 2>/dev/null || true
 BASHRC_EOF
     fi
-    
-    # Update Homebrew
-    log_info "Updating Homebrew..."
-    brew update --quiet || log_warn "brew update failed, continuing..."
     
     log_ok "Homebrew is ready!"
     exit 0
 fi
 
-# Brew not installed - prompt user
+# =============================================================================
+# STEP 2: Homebrew not found - prompt for installation
+# =============================================================================
 echo ""
 log_warn "Homebrew is NOT installed."
 echo ""
@@ -83,47 +113,31 @@ echo ""
 # Run Homebrew installer
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
 
-# Detect installation path
-if [ -d "/home/linuxbrew/.linuxbrew" ]; then
+# Verify installation
+if [ -f "/home/linuxbrew/.linuxbrew/bin/brew" ]; then
+    BREW_BIN="/home/linuxbrew/.linuxbrew/bin/brew"
     BREW_PREFIX="/home/linuxbrew/.linuxbrew"
-elif [ -d "$HOME/.linuxbrew" ]; then
-    BREW_PREFIX="$HOME/.linuxbrew"
 else
-    BREW_PREFIX="$HOME/.brew"
-fi
-
-BREW_BIN="$BREW_PREFIX/bin/brew"
-
-if [ ! -f "$BREW_BIN" ]; then
-    log_err "Homebrew installation failed.brew not found at $BREW_BIN"
+    log_err "Homebrew installation failed."
     exit 1
 fi
 
-# Add to PATH and bashrc
+# Set PATH for this session
+export HOMEBREW_PREFIX="$BREW_PREFIX"
+export PATH="$BREW_PREFIX/bin:$PATH"
+eval "$($BREW_BIN --env 2>/dev/null)" 2>/dev/null || true
+
+# Add to bashrc
 log_info "Configuring Homebrew in ~/.bashrc..."
-cat >> ~/.bashrc << 'BASHRC_EOF'
+cat >> "$HOME/.bashrc" << 'BASHRC_EOF'
 
 # Homebrew
-eval "$(/home/linuxbrew/.linuxbrew/bin/brew --env 2>/dev/null)" 2>/dev/null || true
 export HOMEBREW_PREFIX="/home/linuxbrew/.linuxbrew"
 export PATH="/home/linuxbrew/.linuxbrew/bin:$PATH"
 BASHRC_EOF
 
-# Source brew environment for this script
-eval "$($BREW_BIN --env)"
-
-# Ensure build tools are installed (Linux dependencies)
-log_info "Installing Linux build dependencies..."
-$BREW_BIN install gcc make 2>/dev/null || true
-
 log_ok "Homebrew installed successfully!"
 log_ok "Path: $BREW_PREFIX"
 log_ok ""
-log_info "IMPORTANT: Run these commands to activate Homebrew in current session:"
-echo ""
-echo "  source ~/.bashrc"
-echo "  eval \"\$($BREW_BIN --env)\""
-echo ""
-log_info "Then re-run this installation script."
-
-exit 0
+log_info "IMPORTANT: For new shells, run: source ~/.bashrc"
+log_info "Then continue with: ./01-postgresql.sh"
