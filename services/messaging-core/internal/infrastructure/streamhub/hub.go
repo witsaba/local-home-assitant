@@ -135,10 +135,18 @@ func (h *CameraHub) RegisterViewer(ctx context.Context, mac string, conn *websoc
 		return fmt.Errorf("streamhub: camera %q is closed", mac)
 	}
 	state.viewers[conn] = struct{}{}
-	needsConnect := state.client == nil
+	// Need a chip connection if there is none, OR if the one we hold is no
+	// longer connected. The second condition is the important one: a client
+	// object can outlive its socket, and a stale-but-non-nil state.client
+	// makes every later viewer wait on a connection that can never deliver,
+	// with no error to observe. Measured on the Pi: viewer gets 101 and then
+	// nothing, forever, while the previous socket sits ESTAB with 1.3MB
+	// unread because its reader is gone.
+	needConnect := state.client == nil ||
+		!state.client.IsConnected()
 	state.mu.Unlock()
 
-	if needsConnect {
+	if needConnect {
 		h.log.Info("streamhub: first viewer for camera, connecting to chip",
 			ports.Field{Key: "mac", Value: mac},
 			ports.Field{Key: "chip_ip", Value: chipIP},
@@ -255,11 +263,22 @@ func (h *CameraHub) getCamera(mac string) *cameraState {
 // the onFrame callback to fan-out to all viewers.
 func (h *CameraHub) connectChip(state *cameraState, chipIP string) error {
 	state.mu.Lock()
-	if state.client != nil {
+	if state.client != nil && state.client.IsConnected() {
 		state.mu.Unlock()
 		return nil // already connected
 	}
+	// Any client object still parked here is detached and replaced. Leaving it
+	// in place would let RegisterViewer's !IsConnected() check treat the dead
+	// connection as the live one on the next pass.
+	stale := state.client
+	state.client = nil
 	state.mu.Unlock()
+
+	if stale != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_ = stale.Close(ctx)
+		cancel()
+	}
 
 	client := h.newClient(
 		chipIP,
@@ -293,19 +312,36 @@ func (h *CameraHub) connectChip(state *cameraState, chipIP string) error {
 }
 
 // closeChip gracefully closes the chip connection for a camera.
+//
+// The client is detached from the state UNDER the lock and closed OUTSIDE it.
+// Closing a ChipClient waits for its read loop to exit, and that read loop's
+// deferred onClose callback re-enters this cameraState to take state.mu -- so
+// closing while holding the lock risks a self-deadlock. The context is bounded
+// for the same reason: an unbounded wait on a wedged socket would block every
+// later viewer for that camera indefinitely.
 func (h *CameraHub) closeChip(state *cameraState) {
 	state.mu.Lock()
-	defer state.mu.Unlock()
+	client := state.client
+	state.client = nil
+	hadClient := client != nil
+	state.mu.Unlock()
 
-	if state.client == nil {
+	if !hadClient {
 		return
 	}
 
 	h.log.Info("streamhub: last viewer left, closing chip connection",
 		ports.Field{Key: "mac", Value: state.mac},
 	)
-	state.client.Close(context.Background())
-	state.client = nil
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := client.Close(ctx); err != nil {
+		h.log.Warn("streamhub: chip close did not complete cleanly",
+			ports.Field{Key: "mac", Value: state.mac},
+			ports.Field{Key: "err", Value: err.Error()},
+		)
+	}
 }
 
 // broadcastToViewers sends a frame to all registered web viewers for a camera.
