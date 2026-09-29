@@ -99,8 +99,13 @@ Wants=network-online.target
 Type=oneshot
 RemainAfterExit=yes
 EnvironmentFile=$ENV_FILE
-ExecStart=$PG_CTL -D $PG_DATA_DIR -l $PG_LOG_DIR/pg_ctl.log -w -t 30 start
-ExecStop=$PG_CTL -D $PG_DATA_DIR -m fast -w -t 30 stop
+# The wrapper is idempotent. pg_ctl exits 1 with "another server might be
+# running" when the cluster is already up, which happens routinely: the install
+# scripts start it, and so does a manual start before the units are enabled.
+# A unit that fails in that state would restart-loop and, because the two Go
+# services Require= the readiness gate, take the whole stack down with it.
+ExecStart=$INSTALL_DIR/postgres/start.sh
+ExecStop=$INSTALL_DIR/postgres/stop.sh
 # Startup is retried, but a stopped-on-purpose cluster should stay stopped.
 Restart=on-failure
 RestartSec=10
@@ -244,9 +249,11 @@ PrivateTmp=yes
 ProtectSystem=strict
 ProtectHome=read-only
 ReadWritePaths=$NGINX_PREFIX
-# Binding a port above 1024 does not need any capability.
-AmbientCapabilities=
-CapabilityBoundingSet=
+# No AmbientCapabilities/CapabilityBoundingSet here on purpose. Those directives
+# are for system units: a user-unit process never holds capabilities, and
+# systemd fails the unit with 218/CAPABILITIES ("Failed to drop capabilities:
+# Operation not permitted") when it tries to drop a set the user manager is not
+# privileged to drop. NoNewPrivileges above is the directive that does apply.
 
 [Install]
 WantedBy=default.target

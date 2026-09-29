@@ -227,14 +227,36 @@ PGHBA_EOF
 # -----------------------------------------------------------------------------
 # 5. Control helpers (used by the systemd unit and by hand)
 # -----------------------------------------------------------------------------
+# start.sh is idempotent on purpose. pg_ctl exits 1 with "another server might
+# be running" when the cluster is already up, and that is the normal state: the
+# install scripts start it, an operator may start it by hand, and the systemd
+# unit runs it at boot after a crash-loop. Treating that as success is what
+# keeps the unit from restart-looping and taking the Go services down with it.
 cat > "$INSTALL_DIR/postgres/start.sh" << EOF
 #!/bin/bash
-exec "$PG_CTL" -D "$PG_DATA_DIR" -l "$PG_LOG_DIR/pg_ctl.log" -w start
+PG_CTL="$PG_CTL"
+PG_DATA_DIR="$PG_DATA_DIR"
+PG_LOG_DIR="$PG_LOG_DIR"
+
+if "\$PG_CTL" -D "\$PG_DATA_DIR" status >/dev/null 2>&1; then
+    echo "postgres already running on \$PG_DATA_DIR"
+    exit 0
+fi
+
+exec "\$PG_CTL" -D "\$PG_DATA_DIR" -l "\$PG_LOG_DIR/pg_ctl.log" -w -t 30 start
 EOF
 
 cat > "$INSTALL_DIR/postgres/stop.sh" << EOF
 #!/bin/bash
-exec "$PG_CTL" -D "$PG_DATA_DIR" -m fast -w stop
+PG_CTL="$PG_CTL"
+PG_DATA_DIR="$PG_DATA_DIR"
+
+if ! "\$PG_CTL" -D "\$PG_DATA_DIR" status >/dev/null 2>&1; then
+    echo "postgres not running on \$PG_DATA_DIR"
+    exit 0
+fi
+
+exec "\$PG_CTL" -D "\$PG_DATA_DIR" -m fast -w -t 30 stop
 EOF
 
 cat > "$INSTALL_DIR/postgres/status.sh" << EOF
