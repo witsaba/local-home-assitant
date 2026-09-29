@@ -2,15 +2,27 @@
 # =============================================================================
 # 04-postgres-init.sh - Create the witsaba database, roles and schema
 # =============================================================================
-# Idempotent: safe to re-run. Creates the least-privilege role model the Go
-# services expect, matching services/postgres/init/*.sql from the compose stack.
+# Idempotent: safe to re-run at any time.
+#
+# Role model and grants are kept byte-compatible with the Docker stack so the
+# same services work against either target:
+#   services/postgres/scripts/02-roles.sql  -> role creation
+#   services/postgres/init/03-schema.sql    -> schema + default privileges
+#
+# Two things differ from the compose stack, unavoidably:
+#   1. initdb made the invoking OS user the cluster superuser, so "pg-admin"
+#      is created here as a NOLOGIN role that only owns objects. In compose
+#      the postgres image creates POSTGRES_USER=pg-admin as a real superuser.
+#   2. The compose init deliberately creates no tables (migrations own the
+#      DDL). The native install needs witsaba.devices to exist for the two Go
+#      services to start, so it is created here and granted explicitly to
+#      match what the default privileges below would have produced.
 # =============================================================================
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INSTALL_DIR="$HOME/.witsaba"
-PG_DATA_DIR="$INSTALL_DIR/postgres/data"
 
 export LANG="C.UTF-8"
 export LC_ALL="C.UTF-8"
@@ -41,155 +53,195 @@ echo "  Step 4: witsaba database bootstrap"
 echo "=============================================="
 echo ""
 
-# Load shared config written by 01-postgresql.sh
-if [ -f "$INSTALL_DIR/witsaba.env" ]; then
-    set -a; . "$INSTALL_DIR/witsaba.env"; set +a
-else
-    log_err "$INSTALL_DIR/witsaba.env missing. Run 01-postgresql.sh first."
-    exit 1
-fi
+ENV_FILE="$INSTALL_DIR/witsaba.env"
+[ -f "$ENV_FILE" ] || { log_err "$ENV_FILE missing. Run 01-postgresql.sh first."; exit 1; }
+set -a; . "$ENV_FILE"; set +a
 
 SUPERUSER="$(id -un)"
 PSQL="$HOMEBREW_PREFIX/opt/postgresql@16/bin/psql"
 
+# Admin access over the unix socket: pg_hba.conf grants `trust` for local
+# connections, so no password is needed and the password never reaches argv.
+ADMIN=("$PSQL" -h /tmp -p "$PG_PORT" -U "$SUPERUSER" -d postgres -v ON_ERROR_STOP=1)
+DB=("$PSQL" -h /tmp -p "$PG_PORT" -U "$SUPERUSER" -d "$PG_DATABASE" -v ON_ERROR_STOP=1)
+
+run_admin() { "${ADMIN[@]}" -c "$1"; }
+run_db()    { "${DB[@]}"    -c "$1"; }
+
+# Role names contain hyphens, which is illegal in a bare SQL identifier. Every
+# reference below is double quoted, exactly as services/postgres/init/03-schema.sql
+# does it. A single missing quote pair here is a syntax error, not a warning.
+Q_ADMIN="${PG_ADMIN_USER}"          # "pg-admin"
+Q_WORKER="${PG_USER}"               # "pg-worker"
+Q_MESSAGING="${PG_MESSAGING_CORE_USER}"  # "pg-messaging-core"
+
+role_exists() {
+    "${ADMIN[@]}" -tAc "SELECT 1 FROM pg_roles WHERE rolname = '$1'" | grep -q 1
+}
+
 # -----------------------------------------------------------------------------
-# 1. Start the cluster if it is not already accepting connections
+# 1. Start the cluster
 # -----------------------------------------------------------------------------
-if ! "$PSQL" -h "$PG_HOST" -p "$PG_PORT" -U "$SUPERUSER" -d postgres -c 'SELECT 1' >/dev/null 2>&1; then
+if ! "${ADMIN[@]}" -tAc 'SELECT 1' >/dev/null 2>&1; then
     log_info "Starting PostgreSQL..."
     "$INSTALL_DIR/postgres/start.sh" || {
-        log_err "Could not start PostgreSQL. Check $PG_LOG_DIR/pg_ctl.log"
+        log_err "Could not start PostgreSQL. See $PG_LOG_DIR/pg_ctl.log"
         exit 1
     }
     sleep 1
 fi
-log_ok "PostgreSQL is accepting connections"
-
-# Local socket + trust auth, so no password is needed for admin work.
-ADMIN_PSQL=("$PSQL" -h /tmp -p "$PG_PORT" -U "$SUPERUSER" -d postgres)
+log_ok "PostgreSQL is accepting connections (superuser: $SUPERUSER)"
 
 # -----------------------------------------------------------------------------
 # 2. Database
 # -----------------------------------------------------------------------------
-if "${ADMIN_PSQL[@]}" -tAc "SELECT 1 FROM pg_database WHERE datname='$PG_DATABASE'" | grep -q 1; then
-    log_ok "Database '$PG_DATABASE' exists"
+if "${ADMIN[@]}" -tAc "SELECT 1 FROM pg_database WHERE datname = '$PG_DATABASE'" | grep -q 1; then
+    log_ok "Database '$PG_DATABASE' already exists"
 else
     log_info "Creating database '$PG_DATABASE'..."
-    "${ADMIN_PSQL[@]}" -c "CREATE DATABASE $PG_DATABASE ENCODING 'UTF8' TEMPLATE template0"
+    run_admin "CREATE DATABASE \"$PG_DATABASE\" ENCODING 'UTF8' TEMPLATE template0"
     log_ok "Database created"
 fi
 
 # -----------------------------------------------------------------------------
 # 3. Roles
 #
-# pg-admin       : owns the schema. NOLOGIN, so nothing can authenticate as it.
-# pg-worker      : LOGIN. workers service. CRUD on devices.
-# pg-messaging-core: LOGIN. messaging-core service. SELECT only.
+#   "pg-admin"            NOLOGIN. Owns the schema and the tables. Nothing
+#                         authenticates as it, so it cannot be used to connect.
+#   "pg-worker"           LOGIN. workers service. DML on witsaba.devices.
+#   "pg-messaging-core"   LOGIN. messaging-core service. SELECT only.
+#
+# Neither service role gets CREATEDB, CREATEROLE or SUPERUSER. The ALTER after
+# each CREATE also rotates the password, so editing witsaba.env and re-running
+# this script is the supported way to change credentials.
 # -----------------------------------------------------------------------------
-DB_PSQL=("$PSQL" -h /tmp -p "$PG_PORT" -U "$SUPERUSER" -d "$PG_DATABASE")
+log_info "Ensuring roles..."
 
-log_info "Creating roles..."
+if ! role_exists "$Q_ADMIN"; then
+    run_admin "CREATE ROLE \"$Q_ADMIN\" NOLOGIN"
+    log_ok "  created role \"$Q_ADMIN\" (NOLOGIN)"
+else
+    run_admin "ALTER ROLE \"$Q_ADMIN\" NOLOGIN"
+    log_ok "  role \"$Q_ADMIN\" present (NOLOGIN)"
+fi
 
-"${ADMIN_PSQL[@]}" -v ON_ERROR_STOP=1 <<SQL
-DO \$\$
-BEGIN
-    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '$PG_ADMIN_USER') THEN
-        CREATE ROLE $PG_ADMIN_USER NOLOGIN;
-    END IF;
-END
-\$\$;
-ALTER ROLE $PG_ADMIN_USER NOLOGIN;
+if ! role_exists "$Q_WORKER"; then
+    run_admin "CREATE ROLE \"$Q_WORKER\" LOGIN PASSWORD '$PG_WORKER_PASSWORD'"
+    log_ok "  created role \"$Q_WORKER\" (LOGIN)"
+else
+    run_admin "ALTER ROLE \"$Q_WORKER\" LOGIN PASSWORD '$PG_WORKER_PASSWORD' NOSUPERUSER NOCREATEDB NOCREATEROLE"
+    log_ok "  role \"$Q_WORKER\" present (LOGIN, password synced)"
+fi
 
-DO \$\$
-BEGIN
-    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '$PG_USER') THEN
-        CREATE ROLE $PG_USER LOGIN;
-    END IF;
-END
-\$\$;
-ALTER ROLE $PG_USER LOGIN PASSWORD '$PG_WORKER_PASSWORD';
-
-DO \$\$
-BEGIN
-    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '$PG_MESSAGING_CORE_USER') THEN
-        CREATE ROLE $PG_MESSAGING_CORE_USER LOGIN;
-    END IF;
-END
-\$\$;
-ALTER ROLE $PG_MESSAGING_CORE_USER LOGIN PASSWORD '$PG_MESSAGING_CORE_PASSWORD';
-SQL
-
-log_ok "Roles ready: $PG_ADMIN_USER (owner), $PG_USER, $PG_MESSAGING_CORE_USER"
+if ! role_exists "$Q_MESSAGING"; then
+    run_admin "CREATE ROLE \"$Q_MESSAGING\" LOGIN PASSWORD '$PG_MESSAGING_CORE_PASSWORD'"
+    log_ok "  created role \"$Q_MESSAGING\" (LOGIN)"
+else
+    run_admin "ALTER ROLE \"$Q_MESSAGING\" LOGIN PASSWORD '$PG_MESSAGING_CORE_PASSWORD' NOSUPERUSER NOCREATEDB NOCREATEROLE"
+    log_ok "  role \"$Q_MESSAGING\" present (LOGIN, password synced)"
+fi
 
 # -----------------------------------------------------------------------------
-# 4. Schema and tables
+# 4. Schema + default privileges
+#
+# Identical to services/postgres/init/03-schema.sql.
 # -----------------------------------------------------------------------------
-log_info "Creating schema and tables..."
+log_info "Creating schema 'witsaba' and default privileges..."
 
-"${DB_PSQL[@]}" -v ON_ERROR_STOP=1 <<SQL
-CREATE SCHEMA IF NOT EXISTS witsaba AUTHORIZATION $PG_ADMIN_USER;
+run_db "CREATE SCHEMA IF NOT EXISTS witsaba AUTHORIZATION \"$Q_ADMIN\""
 
--- devices is the only table the v1 stack needs.
-CREATE TABLE IF NOT EXISTS witsaba.devices (
-    mac             TEXT        PRIMARY KEY,
-    name            TEXT,
-    fw              TEXT,
-    chip            TEXT,
-    last_source_ip  INET,
-    first_seen_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
-    last_seen_at    TIMESTAMPTZ NOT NULL
-);
+run_db "GRANT USAGE ON SCHEMA witsaba TO \"$Q_WORKER\""
+run_db "GRANT USAGE ON SCHEMA witsaba TO \"$Q_MESSAGING\""
 
--- The discovery scanner reports devices whose last_seen_at falls inside the
--- last 60s. Without this index that query is a full scan of the table.
-CREATE INDEX IF NOT EXISTS devices_last_seen_at_idx
-    ON witsaba.devices (last_seen_at DESC);
+# Default privileges only affect objects created *after* this point, which is
+# why step 5 has to grant on the table explicitly.
+run_db "ALTER DEFAULT PRIVILEGES FOR ROLE \"$Q_ADMIN\" IN SCHEMA witsaba
+        GRANT INSERT, UPDATE, DELETE, SELECT ON TABLES TO \"$Q_WORKER\""
+run_db "ALTER DEFAULT PRIVILEGES FOR ROLE \"$Q_ADMIN\" IN SCHEMA witsaba
+        GRANT SELECT ON TABLES TO \"$Q_MESSAGING\""
+run_db "ALTER DEFAULT PRIVILEGES FOR ROLE \"$Q_ADMIN\" IN SCHEMA witsaba
+        GRANT USAGE, SELECT ON SEQUENCES TO \"$Q_WORKER\""
+run_db "ALTER DEFAULT PRIVILEGES FOR ROLE \"$Q_ADMIN\" IN SCHEMA witsaba
+        GRANT SELECT ON SEQUENCES TO \"$Q_MESSAGING\""
 
-ALTER TABLE witsaba.devices OWNER TO $PG_ADMIN_USER;
-SQL
-
-# -----------------------------------------------------------------------------
-# 5. Grants
-# -----------------------------------------------------------------------------
-log_info "Applying grants..."
-"${DB_PSQL[@]}" -v ON_ERROR_STOP=1 <<SQL
-GRANT USAGE ON SCHEMA witsaba TO $PG_USER, $PG_MESSAGING_CORE_USER;
-
--- workers: full CRUD, no DDL.
-GRANT SELECT, INSERT, UPDATE, DELETE ON witsaba.devices TO $PG_USER;
-
--- messaging-core: read-only. It never writes.
-GRANT SELECT ON witsaba.devices TO $PG_MESSAGING_CORE_USER;
-
--- Neither role may create objects in the schema.
-REVOKE CREATE ON SCHEMA witsaba FROM PUBLIC;
-REVOKE ALL ON SCHEMA witsaba FROM $PG_USER, $PG_MESSAGING_CORE_USER;
-GRANT USAGE ON SCHEMA witsaba TO $PG_USER, $PG_MESSAGING_CORE_USER;
-SQL
-
-log_ok "Grants applied"
+# Neither service role may create objects in the schema.
+run_db "REVOKE CREATE ON SCHEMA witsaba FROM PUBLIC"
+log_ok "Schema and default privileges ready"
 
 # -----------------------------------------------------------------------------
-# 6. Verify as the application roles
+# 5. witsaba.devices
+#
+# Shape matches the workers README contract exactly. The scanner refreshes
+# name/fw/chip/last_source_ip/last_seen_at on every UPSERT and preserves
+# first_seen_at across refreshes.
 # -----------------------------------------------------------------------------
-log_info "Verifying pg-worker can write..."
+log_info "Creating table witsaba.devices..."
+
+run_db "CREATE TABLE IF NOT EXISTS witsaba.devices (
+            mac             TEXT        PRIMARY KEY,
+            name            TEXT,
+            fw              TEXT,
+            chip            TEXT,
+            last_source_ip  INET,
+            first_seen_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+            last_seen_at    TIMESTAMPTZ NOT NULL
+        )"
+
+# GET /api/devices/active filters on last_seen_at within the last 60s. Without
+# this index that is a sequential scan on every dashboard poll.
+run_db "CREATE INDEX IF NOT EXISTS devices_last_seen_at_idx
+             ON witsaba.devices (last_seen_at DESC)"
+
+run_db "ALTER TABLE witsaba.devices OWNER TO \"$Q_ADMIN\""
+
+# Mirrors the default privileges above, for this already-existing table.
+run_db "GRANT SELECT, INSERT, UPDATE, DELETE ON witsaba.devices TO \"$Q_WORKER\""
+run_db "GRANT SELECT ON witsaba.devices TO \"$Q_MESSAGING\""
+log_ok "Table witsaba.devices ready"
+
+# -----------------------------------------------------------------------------
+# 6. Verify the real contract: each service role over TCP, with its password
+# -----------------------------------------------------------------------------
+log_info "Verifying \"$Q_WORKER\" can authenticate over TCP..."
 PGPASSWORD="$PG_WORKER_PASSWORD" "$PSQL" -h "$PG_HOST" -p "$PG_PORT" \
-    -U "$PG_USER" -d "$PG_DATABASE" -tAc "SELECT 1" >/dev/null
-log_ok "pg-worker authenticates"
+    -U "$Q_WORKER" -d "$PG_DATABASE" -v ON_ERROR_STOP=1 \
+    -c "SELECT 1 AS ok" >/dev/null
+log_ok "  \"$Q_WORKER\" authenticates (SELECT allowed)"
 
-log_info "Verifying pg-messaging-core can read..."
+log_info "Verifying \"$Q_MESSAGING\" can read but not write..."
 PGPASSWORD="$PG_MESSAGING_CORE_PASSWORD" "$PSQL" -h "$PG_HOST" -p "$PG_PORT" \
-    -U "$PG_MESSAGING_CORE_USER" -d "$PG_DATABASE" \
-    -tAc "SELECT count(*) FROM witsaba.devices" >/dev/null
-log_ok "pg-messaging-core authenticates"
+    -U "$Q_MESSAGING" -d "$PG_DATABASE" -v ON_ERROR_STOP=1 \
+    -c "SELECT count(*) AS devices FROM witsaba.devices" >/dev/null
+log_ok "  \"$Q_MESSAGING\" can read witsaba.devices"
 
+# A read-only role must be rejected on write. Expected to fail, so ON_ERROR_STOP
+# is deliberately off and the exit status is inverted.
+if PGPASSWORD="$PG_MESSAGING_CORE_PASSWORD" "$PSQL" -h "$PG_HOST" -p "$PG_PORT" \
+        -U "$Q_MESSAGING" -d "$PG_DATABASE" \
+        -c "INSERT INTO witsaba.devices (mac, last_seen_at) VALUES ('00:00:00:00:00:00', now())" \
+        >/dev/null 2>&1; then
+    log_err "  \"$Q_MESSAGING\" was able to INSERT -- least-privilege model is broken"
+    exit 1
+fi
+log_ok "  \"$Q_MESSAGING\" correctly denied INSERT"
+
+# -----------------------------------------------------------------------------
+# 7. Summary
+# -----------------------------------------------------------------------------
 echo ""
 log_ok "Database bootstrap complete"
-log_info "  database : $PG_DATABASE"
-log_info "  schema   : witsaba"
-log_info "  tables   : witsaba.devices"
-log_info ""
-log_warn "Default passwords are in $INSTALL_DIR/witsaba.env"
-log_warn "Change them there AND in the database before exposing anything."
+echo ""
+echo "  database : $PG_DATABASE"
+echo "  schema   : witsaba (owner \"$Q_ADMIN\")"
+echo "  table    : witsaba.devices"
+echo "  indexes  : devices_pkey, devices_last_seen_at_idx"
+echo ""
+printf "  %-20s %-10s %s\n" "role" "login" "privileges"
+printf "  %-20s %-10s %s\n" "\"$Q_ADMIN\"" "no" "owns schema + tables"
+printf "  %-20s %-10s %s\n" "\"$Q_WORKER\"" "yes" "SELECT, INSERT, UPDATE, DELETE"
+printf "  %-20s %-10s %s\n" "\"$Q_MESSAGING\"" "yes" "SELECT only"
+echo ""
+log_warn "Passwords are still the defaults in $ENV_FILE"
+log_warn "Change them there and re-run this script to rotate."
 log_info ""
 log_info "Next: ./10-build-go.sh"
