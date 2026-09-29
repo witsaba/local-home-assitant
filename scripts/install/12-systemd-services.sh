@@ -25,13 +25,8 @@ done
 export HOMEBREW_PREFIX="$(dirname "$(dirname "$BREW_BIN")")"
 export PATH="$HOMEBREW_PREFIX/bin:$PATH"
 
-# Colors
-RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
-BLUE='\033[0;34m'; NC='\033[0m'
-log_info() { echo -e "${BLUE}[i]${NC} $1"; }
-log_ok()   { echo -e "${GREEN}[✓]${NC} $1"; }
-log_warn() { echo -e "${YELLOW}[!]${NC} $1"; }
-log_err()  { echo -e "${RED}[x]${NC} $1" >&2; }
+# setup_node_env / pnpm_bin live here. Sourced before anything uses them.
+. "$SCRIPT_DIR/_lib.sh"
 
 echo ""
 echo "=============================================="

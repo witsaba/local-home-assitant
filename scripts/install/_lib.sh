@@ -5,7 +5,22 @@
 # Sourced, never executed. Keep this dependency-free: coreutils only, no
 # openssl, no python, no perl. The target is a minimal Ubuntu Server image on
 # a 1GB Raspberry Pi where an extra toolchain is a real cost.
+#
+# This file is self-sufficient: sourcing it gives you the colour/logging
+# helpers as well as the utility functions. A script that only sources this
+# and calls log_ok must not fail with "command not found".
 # =============================================================================
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m'
+
+log_info() { echo -e "${BLUE}[i]${NC} $1"; }
+log_ok()   { echo -e "${GREEN}[✓]${NC} $1"; }
+log_warn() { echo -e "${YELLOW}[!]${NC} $1"; }
+log_err()  { echo -e "${RED}[x]${NC} $1" >&2; }
 
 # -----------------------------------------------------------------------------
 # gen_secret
