@@ -82,6 +82,15 @@ if [ ${#missing[@]} -gt 0 ]; then
     exit 1
 fi
 
+# These passwords are about to be written into the database. If the env file
+# was hand-edited into something weak, say so here rather than discovering it
+# during an incident. Non-fatal: an operator may legitimately supply their own.
+. "$SCRIPT_DIR/_lib.sh"
+if is_weak_secret "$PG_WORKER_PASSWORD" || is_weak_secret "$MESSAGING_CORE_PG_PASSWORD"; then
+    log_warn "a database password in $ENV_FILE looks weak (placeholder, short or low-entropy)"
+    log_warn "re-run 01-postgresql.sh to regenerate, or set your own in $ENV_FILE"
+fi
+
 SUPERUSER="$(id -un)"
 PSQL="$HOMEBREW_PREFIX/opt/postgresql@16/bin/psql"
 
