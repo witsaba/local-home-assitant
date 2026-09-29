@@ -3,5 +3,10 @@
 .codegraph/
 scripts/__pycache__/
 
-# Local docker-compose overrides. env.example is the template and IS tracked.
+# Locally docker-compose overrides. env.example is the template and IS tracked.
 .env
+
+# Cross-compiled Go binaries produced by scripts/install/10-build-go.sh
+# --target <arch> --out ./build. Build artefacts, never committed.
+/build/
+scripts/install/build/
