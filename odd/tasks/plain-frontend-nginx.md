@@ -61,16 +61,16 @@ scripts/install/uninstall-ubuntu.sh     stop removing a web-ui unit that no long
 
 ## Tasks
 
-- [ ] 1. Static frontend: `app.css` (design tokens ported from `global.css`)
-- [ ] 2. Static frontend: `app.js` (api fetch, relative time, status helpers)
-- [ ] 3. Static frontend: `index.html` (home, four feature cards)
-- [ ] 4. Static frontend: `devices.html` (table, empty/error states, auto-refresh)
-- [ ] 5. `13-nginx.sh` — install, generate unprivileged config, deploy static files
-- [ ] 6. `test-nginx-config.sh` — `nginx -t`, asset presence, live proxy round-trip
-- [ ] 7. `12-systemd-services.sh` — nginx unit replaces web-ui
-- [ ] 8. Orchestrator + uninstall updates
-- [ ] 9. `README.md` for `scripts/install`
-- [ ] 10. Verify on the Pi: measure RAM, confirm proxy and WebSocket upgrade
+- [x] 1. Static frontend: `app.css` (design tokens ported from `global.css`)
+- [x] 2. Static frontend: `app.js` (api fetch, relative time, status helpers)
+- [x] 3. Static frontend: `index.html` (home, four feature cards)
+- [x] 4. Static frontend: `devices.html` (table, empty/error states, auto-refresh)
+- [x] 5. `13-nginx.sh` — install, generate unprivileged config, deploy static files
+- [x] 6. `test-nginx-config.sh` — `nginx -t`, asset presence, live proxy round-trip
+- [x] 7. `12-systemd-services.sh` — nginx unit replaces web-ui
+- [x] 8. Orchestrator + uninstall updates
+- [x] 9. `README.md` for `scripts/install`
+- [x] 10. Verify on the Pi: measure RAM, confirm proxy and WebSocket upgrade
 
 ## Out of scope
 
@@ -93,3 +93,36 @@ scripts/install/uninstall-ubuntu.sh     stop removing a web-ui unit that no long
 - Total frontend runtime RAM is under 20 MB, versus 143 MB for `vite preview`.
 - Removing `~/.witsaba/frontend` (the 308 MB Qwik tree) does not break serving.
 - Every install script passes `bash -n` and `test-scripts-load.sh`.
+
+## Closed-by commits
+
+| # | SHA | Subject |
+|---|-----|---------|
+| 1 | `da92e9e` | feat(web): plain HTML/CSS/JS frontend served by nginx, user space |
+| 2 | `4ac3197` | fix(systemd): drop capability directives from the user unit; make postgres start idempotent |
+| 3 | `2d83da8` | fix(nginx): map extensionless URLs to .html files |
+
+## Verified on the target
+
+- 42 + 30 + 25 = 97 assertions pass across the three suites
+- All five units `active` and `enabled`; `NRestarts=0` after a clean restart,
+  and still 0 after 25s, so no crash-loop
+- `GET /`, `GET /devices`, `GET /assets/app.css` all 200 from the LAN address
+- `/api/devices/active` proxied to messaging-core, HTTP 200, JSON array
+- `/stream/{mac}` upgrade: status, `Content-Type` and `Content-Length` identical
+  to hitting `:8080` directly, so nginx is a transparent proxy
+- nginx 8 MB RSS + 4 MB worker, versus 143 MB for `vite preview`
+- Whole stack: postgres ~78 MB, messaging-core ~21 MB, workers ~17 MB,
+  nginx ~12 MB = ~112 MB, on ~240 MB of OS baseline
+
+## Follow-ups
+
+- Camera stream viewer. `messaging-core` already serves `GET /stream/{mac}`
+  and it is roughly 20 lines of plain JS; the proxy is verified and waiting.
+- `/discovery`, `/logs`, `/settings` are still placeholder cards, as they were.
+- Decide the fate of the Qwik scaffold and update `PRODUCT.md` / `DESIGN.md`,
+  which both still describe a Node dev server on the Pi.
+- `frontend/web_ui/Dockerfile` pins `NODE_VERSION=22.13.0`, below the
+  `>=22.19.0` that `undici@8.11.2` requires, and
+  `frontend/web_ui/package.json` claims `engines.node` allows Node 18/20. The
+  container build has the same latent failure as the Node 20 path.
