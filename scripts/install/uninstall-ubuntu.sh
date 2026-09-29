@@ -43,6 +43,7 @@ echo "  - Witsaba binaries:     $INSTALL_DIR/bin/"
 echo "  - Witsaba frontend:    $INSTALL_DIR/frontend/"
 echo "  - PostgreSQL data:      $INSTALL_DIR/postgres/"
 echo "  - Systemd services:     witsaba-*.service"
+echo "  - nginx config + tree:  ~/.witsaba/nginx/"
 echo "  - Witsaba source:      ~/repositories/witsaba"
 echo ""
 echo "This will NOT remove:"
@@ -70,7 +71,7 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 SYSTEMD_DIR="$HOME/.config/systemd/user"
 
 if [ -d "$SYSTEMD_DIR" ]; then
-    for service in witsaba-postgres witsaba-messaging-core witsaba-workers witsaba-web-ui; do
+    for service in witsaba-postgres witsaba-postgres-ready witsaba-messaging-core witsaba-workers witsaba-nginx witsaba-web-ui; do
         if systemctl --user list-unit-files | grep -q "$service"; then
             log_info "Stopping $service..."
             systemctl --user stop "$service" 2>/dev/null || true

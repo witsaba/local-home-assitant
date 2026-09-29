@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Witsaba</title>
+    <meta name="description" content="Local home assistant control surface." />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/assets/app.css" />
+  </head>
+  <body>
+    <div class="page">
+      <header class="top-bar">
+        <div class="top-bar__brand">
+          <h1 class="top-bar__title">Witsaba</h1>
+          <span class="top-bar__subtitle" id="api-status">checking&hellip;</span>
+        </div>
+        <nav class="top-bar__nav" aria-label="Primary">
+          <a class="top-bar__link" href="/" aria-current="page">Home</a>
+          <a class="top-bar__link" href="/devices">Devices</a>
+        </nav>
+      </header>
+
+      <main>
+        <ul class="card-grid">
+          <li>
+            <article class="feature-card" aria-label="Devices">
+              <div class="feature-card__head">
+                <span class="feature-card__icon" aria-hidden="true">&#9678;</span>
+                <span class="status-chip status-chip--info" data-card="devices">
+                  <span class="status-chip__dot" aria-hidden="true"></span>
+                  <span data-status-label>checking</span>
+                </span>
+              </div>
+              <h2 class="feature-card__title">Devices</h2>
+              <p class="feature-card__description">
+                Cameras, sensors, and actuators discovered on the LAN.
+              </p>
+              <a class="feature-card__action" href="/devices">Open</a>
+            </article>
+          </li>
+
+          <li>
+            <article class="feature-card" aria-label="Discovery">
+              <div class="feature-card__head">
+                <span class="feature-card__icon" aria-hidden="true">&#9100;</span>
+                <span class="status-chip" data-card="discovery">
+                  <span class="status-chip__dot" aria-hidden="true"></span>
+                  <span data-status-label>not connected</span>
+                </span>
+              </div>
+              <h2 class="feature-card__title">Discovery</h2>
+              <p class="feature-card__description">
+                Live status of the workers LAN discovery probes.
+              </p>
+              <a
+                class="feature-card__action"
+                href="/discovery"
+                aria-disabled="true"
+                >Open</a
+              >
+            </article>
+          </li>
+
+          <li>
+            <article class="feature-card" aria-label="Logs">
+              <div class="feature-card__head">
+                <span class="feature-card__icon" aria-hidden="true">&#9776;</span>
+                <span class="status-chip" data-card="logs">
+                  <span class="status-chip__dot" aria-hidden="true"></span>
+                  <span data-status-label>not connected</span>
+                </span>
+              </div>
+              <h2 class="feature-card__title">Logs</h2>
+              <p class="feature-card__description">
+                Recent activity from workers, messaging-core, and the UI.
+              </p>
+              <a class="feature-card__action" href="/logs" aria-disabled="true"
+                >Open</a
+              >
+            </article>
+          </li>
+
+          <li>
+            <article class="feature-card" aria-label="Settings">
+              <div class="feature-card__head">
+                <span class="feature-card__icon" aria-hidden="true">&#9881;</span>
+                <span class="status-chip" data-card="settings">
+                  <span class="status-chip__dot" aria-hidden="true"></span>
+                  <span data-status-label>not connected</span>
+                </span>
+              </div>
+              <h2 class="feature-card__title">Settings</h2>
+              <p class="feature-card__description">
+                Stack configuration, secrets, and adapter selection.
+              </p>
+              <a
+                class="feature-card__action"
+                href="/settings"
+                aria-disabled="true"
+                >Open</a
+              >
+            </article>
+          </li>
+        </ul>
+      </main>
+
+      <footer class="page-footer">
+        <span>witsaba &middot; local-home-assitant</span>
+        <span id="footer-refresh"></span>
+      </footer>
+    </div>
+
+    <script src="/assets/app.js"></script>
+    <script>
+      // Only the Devices card has a real endpoint behind it today. Probing it
+      // is enough to tell the operator whether the API side of the stack is up
+      // without a separate status page.
+      (function () {
+        var apiStatus = document.getElementById("api-status");
+        var footerRefresh = document.getElementById("footer-refresh");
+        var devicesChip = document.querySelector('[data-card="devices"]');
+
+        witsaba.onVisible(function () {
+          witsaba
+            .api("/api/devices/active", { timeoutMs: 5000 })
+            .then(function (devices) {
+              var count = Array.isArray(devices) ? devices.length : 0;
+              witsaba.setStatus(
+                devicesChip,
+                "healthy",
+                count === 1 ? "1 device active" : count + " devices active",
+                false,
+              );
+              apiStatus.textContent = "api online";
+            })
+            .catch(function (err) {
+              witsaba.setStatus(devicesChip, "error", "api unreachable", true);
+              apiStatus.textContent = "api offline";
+              footerRefresh.textContent = err.message;
+            });
+        }, 15000);
+      })();
+    </script>
+  </body>
+</html>

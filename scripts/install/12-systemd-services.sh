@@ -25,7 +25,7 @@ done
 export HOMEBREW_PREFIX="$(dirname "$(dirname "$BREW_BIN")")"
 export PATH="$HOMEBREW_PREFIX/bin:$PATH"
 
-# setup_node_env / pnpm_bin live here. Sourced before anything uses them.
+# Shared helpers (logging, available_mem_mb). Sourced before anything uses them.
 . "$SCRIPT_DIR/_lib.sh"
 
 echo ""
@@ -42,26 +42,27 @@ set -a; . "$ENV_FILE"; set +a
 PG_BIN_DIR="${PG_BIN_DIR:-$HOMEBREW_PREFIX/opt/postgresql@16/bin}"
 PG_CTL="$PG_BIN_DIR/pg_ctl"
 
-# Resolve the Node toolchain. $HOMEBREW_PREFIX/bin/node is NOT the right answer:
-# Homebrew's versioned node formulae are keg-only, so brew/bin/node is whatever
-# else happens to be installed. Resolve through opt/node@22 (or whatever
-# 03-node.sh recorded) and prefer the paths witaba.env already pinned, so the
-# unit runs the same interpreter the build used.
-setup_node_env
-if [ -n "${NODE_BIN_OVERRIDE:-}" ]; then
-    NODE_BIN="$NODE_BIN_OVERRIDE"
-fi
-PNPM_BIN="$(pnpm_bin)"
+# nginx serves the static frontend and proxies /api and /stream. It needs no
+# node runtime at all, which is the point: the previous unit ran
+# `pnpm preview` under a node@22 keg, which cost 143MB of RAM to serve a page
+# that is 40KB on disk.
+NGINX_BIN="$HOMEBREW_PREFIX/bin/nginx"
+NGINX_PREFIX="$INSTALL_DIR/nginx"
+NGINX_CONF="$NGINX_PREFIX/nginx.conf"
 
-if [ ! -x "$PNPM_BIN" ]; then
-    log_err "pnpm not found at $PNPM_BIN. Run 03-node.sh first."
-    exit 1
-fi
 if [ ! -x "$PG_CTL" ]; then
     log_err "pg_ctl not found at $PG_CTL. Run 01-postgresql.sh first."
     exit 1
 fi
-log_ok "pnpm   : $PNPM_BIN ($("$PNPM_BIN" --version 2>/dev/null || echo '?'))"
+if [ ! -x "$NGINX_BIN" ]; then
+    log_err "nginx not found at $NGINX_BIN. Run 13-nginx.sh first."
+    exit 1
+fi
+if [ ! -f "$NGINX_CONF" ]; then
+    log_err "$NGINX_CONF missing. Run 13-nginx.sh first."
+    exit 1
+fi
+log_ok "nginx  : $NGINX_BIN ($("$NGINX_BIN" -v 2>&1 | sed 's|.*nginx/||;s/ .*//'))"
 log_ok "pg_ctl : $PG_CTL"
 
 for bin in "$PG_CTL"; do
@@ -205,45 +206,51 @@ WantedBy=default.target
 EOF
 
 # -----------------------------------------------------------------------------
-# 4. web_ui
+# 4. nginx
 #
-# The Qwik scaffold has no SSR adapter, so `vite preview` is a dev-server
-# process. It stays in PATH and runs as the same user, but it is the heaviest
-# single process in the stack -- hence the lowest heap cap.
+# Serves the static frontend and reverse-proxies /api and /stream to
+# messaging-core, so the browser makes one same-origin request and nothing
+# needs CORS. Replaces the `vite preview` unit: same URL, 143MB -> single-digit
+# megabytes, and no node runtime in the serving path at all.
 # -----------------------------------------------------------------------------
-cat > "$SYSTEMD_DIR/witsaba-web-ui.service" << EOF
+cat > "$SYSTEMD_DIR/witsaba-nginx.service" << EOF
 [Unit]
-Description=Witsaba web UI (Qwik via vite preview)
-After=network-online.target
+Description=Witsaba web UI (nginx: static files + API/WebSocket proxy)
+After=network-online.target witsaba-messaging-core.service
 Wants=network-online.target
+# Not Requires: if messaging-core is down, nginx should still serve the UI and
+# show the 50x page, which explains the outage. Restarting nginx would not fix
+# a backend that is not running.
 
 [Service]
+# nginx runs in the foreground (daemon off in the generated config) so systemd
+# supervises the real process. No fork, no pid file to lose track of.
 Type=simple
-WorkingDirectory=$INSTALL_DIR/frontend
 EnvironmentFile=$ENV_FILE
-Environment=NODE_ENV=production
-Environment=HOST=0.0.0.0
-Environment=PORT=4173
-# V8 heap ceiling. 1GB box with ~350MB already spoken for: keep V8 honest
-# instead of letting it grow to the machine's memory limit.
-Environment=NODE_OPTIONS=--max-old-space-size=192
-# pnpm is a shim that resolves 'node' from PATH. Without this the unit can
-# silently start under whatever node happens to be in brew/bin, which is not
-# the keg-only node@22 the build used. Note the shebang inside a unit file
-# cannot interpolate \$, so this is expanded by the generating script.
-Environment=PATH=$(dirname "$NODE_BIN"):/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-ExecStart=$PNPM_BIN preview --host 0.0.0.0 --port 4173
-Restart=always
+# Fail before starting if the config is broken, rather than crash-looping.
+ExecStartPre=$NGINX_BIN -t -c $NGINX_CONF -p $NGINX_PREFIX
+ExecStart=$NGINX_BIN -c $NGINX_CONF -p $NGINX_PREFIX
+ExecReload=$NGINX_BIN -c $NGINX_CONF -p $NGINX_PREFIX -s reload
+ExecStop=$NGINX_BIN -c $NGINX_CONF -p $NGINX_PREFIX -s quit
+Restart=on-failure
 RestartSec=5
 TimeoutStopSec=15
-MemoryMax=300M
+# nginx with one worker and a LAN-sized connection cap needs very little.
+MemoryMax=64M
 MemoryAccounting=yes
+# It only reads its own tree under $HOME and talks to loopback.
 NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=$NGINX_PREFIX
+# Binding a port above 1024 does not need any capability.
+AmbientCapabilities=
+CapabilityBoundingSet=
 
 [Install]
 WantedBy=default.target
 EOF
-
 # -----------------------------------------------------------------------------
 # 5. Enable
 # -----------------------------------------------------------------------------
@@ -251,7 +258,7 @@ log_info "Reloading user manager..."
 systemctl --user daemon-reload
 
 log_info "Enabling units..."
-for unit in witsaba-postgres witsaba-postgres-ready witsaba-messaging-core witsaba-workers witsaba-web-ui; do
+for unit in witsaba-postgres witsaba-postgres-ready witsaba-messaging-core witsaba-workers witsaba-nginx; do
     systemctl --user enable "$unit.service" >/dev/null 2>&1 || true
 done
 
@@ -262,15 +269,15 @@ echo "  witsaba-postgres.service          PostgreSQL 16 (oneshot, RemainAfterExi
 echo "  witsaba-postgres-ready.service     readiness gate for the two Go services"
 echo "  witsaba-messaging-core.service    NATS :4222, WS :8080, API :8081"
 echo "  witsaba-workers.service           LAN discovery every 60s"
-echo "  witsaba-web-ui.service            Qwik on :4173"
+echo "  witsaba-nginx.service            static UI on :4173 + /api and /stream proxy"
 echo ""
 echo "Start everything:"
-echo "  systemctl --user start witsaba-postgres witsaba-postgres-ready witsaba-messaging-core witsaba-workers witsaba-web-ui"
+echo "  systemctl --user start witsaba-postgres witsaba-postgres-ready witsaba-messaging-core witsaba-workers witsaba-nginx"
 echo ""
 echo "Inspect:"
 echo "  systemctl --user status witsaba-messaging-core"
 echo "  journalctl --user -u witsaba-messaging-core -f"
 echo "  journalctl --user -u witsaba-workers -f"
-echo "  journalctl --user -u witsaba-web-ui -f"
+echo "  journalctl --user -u witsaba-nginx -f"
 echo ""
 log_warn "Unit files contain no secrets: passwords live in $ENV_FILE (mode 600)."

@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Devices &middot; Witsaba</title>
+    <meta
+      name="description"
+      content="Devices seen on the LAN in the last 60 seconds."
+    />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/assets/app.css" />
+  </head>
+  <body>
+    <div class="page">
+      <header class="top-bar">
+        <div class="top-bar__brand">
+          <h1 class="top-bar__title">Devices</h1>
+          <span class="top-bar__subtitle" id="subtitle">loading&hellip;</span>
+        </div>
+        <nav class="top-bar__nav" aria-label="Primary">
+          <a class="top-bar__link" href="/">Home</a>
+          <a class="top-bar__link" href="/devices" aria-current="page">Devices</a>
+        </nav>
+      </header>
+
+      <main>
+        <section class="panel">
+          <div class="panel__head">
+            <h2 class="panel__title">Active devices</h2>
+            <span
+              class="status-chip status-chip--info"
+              id="api-chip"
+              role="status"
+            >
+              <span class="status-chip__dot" aria-hidden="true"></span>
+              <span data-status-label>checking</span>
+            </span>
+          </div>
+          <div class="panel__body panel__body--flush" id="device-host">
+            <p class="state">Loading&hellip;</p>
+          </div>
+        </section>
+      </main>
+
+      <footer class="page-footer">
+        <span
+          >A device is listed when it was seen in the last 60 seconds. The page
+          refreshes every 10s.</span
+        >
+        <span id="last-updated"></span>
+      </footer>
+    </div>
+
+    <script src="/assets/app.js"></script>
+    <script>
+      (function () {
+        var host = document.getElementById("device-host");
+        var chip = document.getElementById("api-chip");
+        var subtitle = document.getElementById("subtitle");
+        var lastUpdated = document.getElementById("last-updated");
+
+        var COLUMNS = [
+          { key: "name", label: "Name", className: "device-table__name" },
+          { key: "mac", label: "MAC", className: "device-table__mac" },
+          { key: "chip", label: "Chip" },
+          { key: "fw", label: "Firmware" },
+          { key: "last_source_ip", label: "Address" },
+          { key: "last_seen_at", label: "Last seen" },
+        ];
+
+        function renderTable(devices) {
+          var head = witsaba.el(
+            "thead",
+            null,
+            [
+              witsaba.el(
+                "tr",
+                null,
+                COLUMNS.map(function (col) {
+                  return witsaba.el("th", {
+                    scope: "col",
+                    text: col.label,
+                  });
+                }),
+              ),
+            ],
+          );
+
+          var rows = devices.map(function (device) {
+            return witsaba.el(
+              "tr",
+              null,
+              COLUMNS.map(function (col) {
+                var raw = device[col.key];
+                var isLastSeen = col.key === "last_seen_at";
+                var value =
+                  raw === null || raw === undefined || raw === ""
+                    ? "—"
+                    : isLastSeen
+                      ? witsaba.relativeTime(raw)
+                      : String(raw);
+
+                return witsaba.el("td", {
+                  class:
+                    (col.className || "") + (raw ? "" : " device-table__muted"),
+                  text: value,
+                  // Keep the absolute timestamp available on hover.
+                  title: isLastSeen && raw ? String(raw) : null,
+                });
+              }),
+            );
+          });
+
+          return witsaba.el(
+            "div",
+            { class: "device-table__scroll" },
+            [
+              witsaba.el("table", { class: "device-table" }, [head, witsaba.el("tbody", null, rows)]),
+            ],
+          );
+        }
+
+        function refresh() {
+          witsaba
+            .api("/api/devices/active", { timeoutMs: 5000 })
+            .then(function (devices) {
+              if (!Array.isArray(devices)) {
+                throw new Error("API returned a non-array payload");
+              }
+
+              if (devices.length === 0) {
+                witsaba.showState(
+                  host,
+                  "empty",
+                  "No active devices",
+                  "Nothing has answered on the LAN in the last 60 seconds. The discovery worker probes every 60s.",
+                );
+                witsaba.setStatus(chip, "warning", "0 active", true);
+                subtitle.textContent = "0 active";
+              } else {
+                host.replaceChildren(renderTable(devices));
+                var label =
+                  devices.length === 1
+                    ? "1 device active"
+                    : devices.length + " devices active";
+                witsaba.setStatus(chip, "healthy", label, false);
+                subtitle.textContent = label;
+              }
+
+              lastUpdated.textContent =
+                "updated " + new Date().toLocaleTimeString();
+            })
+            .catch(function (err) {
+              witsaba.showState(
+                host,
+                "error",
+                "Cannot reach the API",
+                "The stack may be starting, or messaging-core is not running. This page retries automatically.",
+                err.message,
+              );
+              witsaba.setStatus(chip, "error", "api unreachable", true);
+              subtitle.textContent = "api offline";
+              lastUpdated.textContent = "last attempt " + new Date().toLocaleTimeString();
+            });
+        }
+
+        witsaba.onVisible(refresh, 10000);
+      })();
+    </script>
+  </body>
+</html>

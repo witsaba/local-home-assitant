@@ -55,9 +55,22 @@ STEPS=(
 
 BUILD_STEPS=(
     "10-build-go.sh:Build Go services"
-    "11-build-frontend.sh:Build web UI"
+    "13-nginx.sh:Serve the static UI with nginx"
     "12-systemd-services.sh:Create systemd services"
 )
+
+# The Qwik/Vite build is not part of the default path any more. It still works
+# and is still useful for framework work on a workstation, but on the Pi it
+# produced 143MB of runtime for a page that is 40KB on disk, and it is not
+# what nginx serves. Opt in with WITSABA_WITH_QWIK=1.
+if [ "${WITSABA_WITH_QWIK:-0}" = "1" ]; then
+    BUILD_STEPS=(
+        "10-build-go.sh:Build Go services"
+        "11-build-frontend.sh:Build web UI (Qwik)"
+        "13-nginx.sh:Serve the static UI with nginx"
+        "12-systemd-services.sh:Create systemd services"
+    )
+fi
 
 # Run installation steps
 for step in "${STEPS[@]}"; do
@@ -161,7 +174,7 @@ echo "  Node.js:      Installed"
 echo "  Database:     Initialized"
 if [ "$SKIP_BUILD" = false ]; then
     echo "  Go services:  Built"
-    echo "  Web UI:       Built"
+    echo "  Web UI:       served by nginx"
     echo "  Services:     Created"
 fi
 echo ""
@@ -180,5 +193,6 @@ echo "     systemctl --user status witsaba-messaging-core"
 echo "     curl http://localhost:8081/api/devices/active"
 echo ""
 echo "  4. Access web UI:"
-echo "     http://192.168.1.115:4173"
+echo "     http://\$(hostname -I 2>/dev/null | awk '{print \$1}'):4173/"
+echo "     or http://localhost:4173/ from the Pi itself"
 echo ""
