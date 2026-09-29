@@ -264,5 +264,5 @@ if [ "$CROSS" = true ]; then
     log_info "      <user>@<host>:~/.witsaba/bin/"
     log_info "  ssh <user>@<host> 'systemctl --user restart witsaba-messaging-core witsaba-workers'"
 else
-    log_info "Next: ./11-build-frontend.sh"
+    log_info "Next: ./13-nginx.sh"
 fi

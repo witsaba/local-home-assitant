@@ -40,8 +40,8 @@ echo ""
 # The helpers a script is expected to provide for itself.
 LOG_FUNCS="log_info log_ok log_warn log_err"
 
-for script in 00-brew.sh 01-postgresql.sh 02-go.sh 03-node.sh 04-postgres-init.sh \
-              10-build-go.sh 11-build-frontend.sh 12-systemd-services.sh \
+for script in 00-brew.sh 01-postgresql.sh 02-go.sh 04-postgres-init.sh \
+              10-build-go.sh 12-systemd-services.sh 13-nginx.sh \
               install-ubuntu.sh uninstall-ubuntu.sh; do
     [ -f "$script" ] || { bad "$script: missing"; continue; }
     echo "  --- $script ---"
@@ -58,7 +58,7 @@ for script in 00-brew.sh 01-postgresql.sh 02-go.sh 03-node.sh 04-postgres-init.s
 
     # 2. every _lib.sh function the script mentions as a bare word must be
     #    resolvable. Match on the word, not on a trailing paren: helpers are
-    #    routinely invoked as `setup_node_env` or $(pnpm_bin), with no
+    #    routinely invoked as `available_mem_mb` or $(gen_secret), with no
     #    parentheses at all, and a call-site regex silently misses those.
     missing=""
     for fn in $LIB_FUNCS; do
