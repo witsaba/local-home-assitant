@@ -291,6 +291,72 @@ assertion that the exact-match block exists, plus live assertions that
 rather than being swallowed by the new block. The second one matters — an
 over-broad fix would silently break the socket.
 
+### Deployed and verified on the Pi (192.168.1.115, aarch64, 899 MB)
+
+Deployed from `origin/feature/camera-stream-ui` @ `0ea17f4` via a fresh clone,
+because the server's original `~/witsaba/local-home-assitant` checkout became
+unlistable — `ls` showed it, `stat`/`cd` on the same path returned `ENOENT`.
+The live install in `~/.witsaba` was never affected and stayed up throughout.
+
+- `13-nginx.sh` → `nginx -t` successful, 7 files / 84K deployed. Then
+  `reload.sh` — **required**, because T4 changed the config and the script
+  deliberately does not reload. A reload keeps the master PID and start time,
+  so confirm it by the new worker process, not by the master timestamp.
+- All 10 routes HTTP 200: `/`, `/devices`, `/stream`,
+  `/stream?mac=d4e9f48d381c`, `/stream.html`, `/assets/app.{js,css}`,
+  `/favicon.svg`, `/healthz`, `/api/devices/active`.
+- Deployed files byte-match the repo commit (md5 on all 5).
+- `test-nginx-config.sh` on the Pi: **28 passed, 0 failed, 0 skipped**,
+  including the new `/stream` and `/stream/<mac>` assertions. (On a machine
+  where the install has never run it reports 1/1/2 because everything is
+  skipped.)
+- 3 cameras active, so the multi-device picker path is live.
+
+**End-to-end stream, through nginx → messaging-core → chip:**
+
+| MAC | Address | Frames | Avg payload | SOI/EOI | Distinct |
+|---|---|---|---|---|---|
+| `d4e9f48d381c` | 192.168.1.199 | 58 | 23,511 B | 58/58 | 58/58 |
+| `c8f09e9d5008` | 192.168.1.48 | 59 | 65,394 B | 59/59 | 59/59 |
+
+~10 fps, matching `CAM_STREAM_PERIOD_MS`. Handshake 101 through nginx in ~62 ms
+with `Sec-WebSocket-Accept` verified.
+
+The gateway relays **binary frames only** — `broadcastToViewers` writes
+`BinaryMessage` and the chip's text hello is not forwarded. So
+`scripts/test_ws_stream.py` (written for the chip, which does send a text
+hello) fails on the gateway path with "first frame opcode 0x2 (expected TEXT
+0x1)". That is a harness/target mismatch, not a product fault; the viewer page
+paints binary frames and ignores text, which is exactly right here.
+
+### Pre-existing defect found in messaging-core (NOT fixed here)
+
+Exposed by actually using the feature. In
+`services/messaging-core/internal/infrastructure/`:
+
+1. **`DeregisterViewer` is never called in production code.** It is declared
+   in the `StreamHub` interface (`wsserver/server.go:43`) and implemented
+   (`streamhub/hub.go:158`), but the only callers are in `hub_test.go`. The
+   comment at `wsserver/server.go:203` claims "the hub's read goroutine will
+   notice and call DeregisterViewer" — **no such goroutine exists**.
+   `handleStream` only calls `RegisterViewer` and `go pingLoop`.
+2. **`pingLoop` cannot detect a dead client.** It sets a read deadline and a
+   pong handler, but nothing ever reads, so the deadline is never evaluated
+   and no pong can arrive. On ping-write failure it closes the conn without
+   deregistering it.
+3. **`broadcastToViewers` writes with no write deadline** (`hub.go:311`).
+
+Observed consequence: `viewer_count` only ever increments (1 → 2 → 3, never
+back to 0), so the chip connection is never closed, and a wedged write to a
+dead viewer stalls the relay for **every** viewer of that camera — a second
+client got 0 frames while the log looked healthy. `systemctl --user restart
+witsaba-messaging-core` cleared it and streaming resumed immediately.
+
+This is outside this feature's scope (`services/messaging-core/**` was
+explicitly excluded, and the fix is Go service work plus tests). It needs its
+own change: a read loop per viewer that deregisters on close, and a write
+deadline on the relay.
+
 ## Verification evidence
 
 ### T1 (observed on the dev machine, Node v26.10.0)
@@ -337,24 +403,25 @@ over-broad fix would silently break the socket.
 - The full nginx suite beyond the above needs `~/.witsaba` and a running
   stack. **Run on the Pi.**
 
-## Still pending (cannot be checked off this machine)
+## Notes and environment observations
 
-- `GET /stream` serving `stream.html` through nginx `try_files`, and
-  `GET /stream?mac=<known>` painting real frames. nginx is not installed here,
-  so the URL-space claim is reasoned from the config (`/stream` does not start
-  with the `location /stream/` prefix, so it falls through to
-  `try_files $uri.html`), not executed. **Verify on the Pi.**
-- End-to-end frame painting against a real camera. Requires the Pi.
-- `test-nginx-config.sh` is fully green only on a machine where the install
-  has been run; on a fresh checkout it fails on the missing document root.
+- `test-nginx-config.sh` is fully green only where the install has been run; on
+  a fresh checkout it fails on the missing document root and skips the rest.
+  Both states are expected; run it on the Pi.
+- The Pi's `engram.service` is crash-looping (`restart counter is at 7774`,
+  `status=203/EXEC`) and `hermes-gateway.service` is failing. Unrelated to this
+  feature, but worth the operator's attention.
 
 ## Follow-ups
 
-- The instrumented harness that proves the blob lifecycle is a real asset and
-  currently lives only in `/tmp`. There is no test directory for `static/` and
-  adding one is outside the scope the user chose. Worth deciding before close:
-  commit it somewhere, or accept that the next change to `witsaba.stream` is
-  unguarded.
+- The instrumented harness that proves the blob lifecycle, and the behavioural
+  harness for the page, are real assets currently living only in `/tmp`. There
+  is no test directory for `static/` and adding one is outside the scope the
+  user chose. Worth deciding before close: commit them somewhere, or accept
+  that the next change to `witsaba.stream` is unguarded.
+- **`messaging-core` viewer leak** (see above). Highest-value follow-up: one
+  leaked viewer per page open, a chip connection that never closes, and a
+  relay that can wedge for every viewer of a camera.
 - `= /stream.html` no-store rule in `13-nginx.sh` — **done in T4**, no longer a
   follow-up.
 - The chip's `/ws/cams` drops inbound frames, so runtime FPS/resolution
