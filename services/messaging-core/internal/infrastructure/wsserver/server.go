@@ -39,7 +39,8 @@ type StreamHub interface {
 
 	// DeregisterViewer removes a web client's WS connection from a camera's
 	// viewer list. If no viewers remain for that MAC, the hub closes the
-	// chip connection.
+	// chip connection. Called from the per-connection read loop when the
+	// client disconnects.
 	DeregisterViewer(ctx context.Context, mac string, conn *websocket.Conn)
 }
 
@@ -175,23 +176,58 @@ func (s *Server) handleStream(c *gin.Context) {
 	// The hub handles frame relay; this goroutine only manages WS health.
 	go s.pingLoop(conn, mac)
 
+	// Start the read loop. gorilla/websocket permits exactly ONE concurrent
+	// reader, and without a reader nothing ever observes the client going
+	// away. That is not merely untidy: the hub holds this conn in
+	// state.viewers, and if it is never removed then (a) the chip connection
+	// is never closed, because DeregisterViewer is what drops the count to
+	// zero, and (b) broadcastToViewers keeps writing to a dead socket, which
+	// blocks the relay for every OTHER viewer of the same camera. Measured on
+	// the Pi: 18 registrations, 0 deregistrations, viewer_count climbing
+	// 1->2->3->4->5->6, then zero frames for everyone.
+	go s.readLoop(mac, conn)
+
 	s.log.Info("wsserver: viewer connected",
 		ports.Field{Key: "mac", Value: mac},
 	)
 }
 
-// pingLoop sends periodic ping frames to the client and reads pong responses.
-// If the client disappears, the WS read loop will fail and the hub will
-// deregister the viewer via its own connection monitoring.
-func (s *Server) pingLoop(conn *websocket.Conn, mac string) {
-	ticker := time.NewTicker(pingPeriod)
-	defer ticker.Stop()
+// readLoop is the single reader for a viewer connection.
+//
+// It exists purely to detect the client disappearing. Browsers send no data
+// frames on this socket -- it is one-way video -- so ReadMessage blocks until
+// the client closes, the connection errors, or the read deadline expires. Pong
+// frames sent in reply to our pings are consumed internally by gorilla and
+// reset the deadline via the pong handler, so a healthy viewer keeps the
+// deadline alive without ever returning from ReadMessage.
+func (s *Server) readLoop(mac string, conn *websocket.Conn) {
+	defer conn.Close()
 
 	conn.SetReadDeadline(time.Now().Add(readDeadline))
 	conn.SetPongHandler(func(_ string) error {
-		conn.SetReadDeadline(time.Now().Add(readDeadline))
-		return nil
+		return conn.SetReadDeadline(time.Now().Add(readDeadline))
 	})
+
+	for {
+		if _, _, err := conn.ReadMessage(); err != nil {
+			s.log.Debug("wsserver: viewer gone, deregistering",
+				ports.Field{Key: "mac", Value: mac},
+				ports.Field{Key: "err", Value: err.Error()},
+			)
+			s.hub.DeregisterViewer(context.Background(), mac, conn)
+			return
+		}
+		// A viewer is not supposed to send data. If one shows up, ignore it:
+		// this socket is one-way video.
+	}
+}
+
+// pingLoop sends periodic ping frames to the client. It is write-only: the
+// single reader for this connection is readLoop, per gorilla's
+// one-concurrent-reader rule.
+func (s *Server) pingLoop(conn *websocket.Conn, mac string) {
+	ticker := time.NewTicker(pingPeriod)
+	defer ticker.Stop()
 
 	for range ticker.C {
 		if err := conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(writeDeadline)); err != nil {
@@ -199,8 +235,8 @@ func (s *Server) pingLoop(conn *websocket.Conn, mac string) {
 				ports.Field{Key: "mac", Value: mac},
 				ports.Field{Key: "err", Value: err.Error()},
 			)
-			// Trigger deregistration by closing the connection.
-			// The hub's read goroutine will notice and call DeregisterViewer.
+			// Closing makes the pending ReadMessage in readLoop fail, which is
+			// what actually triggers DeregisterViewer.
 			conn.Close()
 			return
 		}

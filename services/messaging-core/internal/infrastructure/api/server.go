@@ -11,7 +11,28 @@ import (
 )
 
 // maxActiveAge is the default lookback window for active devices.
-const maxActiveAge = time.Minute
+//
+// It must be comfortably GREATER than the discovery worker's scan interval
+// (DISCOVERY_INTERVAL_SECONDS, default 60s). When the two are equal the list
+// flaps: every device is re-probed at interval + the time it takes the pool to
+// reach it inside the scan, so its age crosses the cutoff just before its own
+// refresh lands and the API drops it. Measured on the Pi at 60s/60s, sampling
+// /api/devices/active every 5s:
+//
+//   0, 3, 3, 3, 3, 3, 3, 3, 1, 0, 2, 2, 2, 2, 2, 2, 2, 0, 3, ...
+//
+// The devices were present the entire time -- discovery reported all three
+// every cycle with upsert_ok=true. 3x the default interval absorbs one or two
+// missed scans, so a single slow cycle no longer empties the list.
+//
+// If DISCOVERY_INTERVAL_SECONDS is raised, raise this too. testActiveWindow
+// ExceedsDiscoveryInterval asserts the relationship holds.
+const maxActiveAge = 3 * time.Minute
+
+// defaultDiscoveryInterval mirrors the workers default
+// (DISCOVERY_INTERVAL_SECONDS). Only used by the test that documents the
+// coupling above.
+const defaultDiscoveryInterval = time.Minute
 
 // Handler serves the messaging-core HTTP REST API.
 type Handler struct {
@@ -44,7 +65,7 @@ type deviceResponse struct {
 }
 
 // listActive handles GET /api/devices/active.
-// It returns devices whose last_seen_at is within the last 60 seconds.
+// It returns devices whose last_seen_at is within maxActiveAge.
 func (h *Handler) listActive(w http.ResponseWriter, r *http.Request) {
 	devs, err := h.repo.ListActive(r.Context(), maxActiveAge)
 	if err != nil {

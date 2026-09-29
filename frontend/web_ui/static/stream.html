@@ -1,0 +1,394 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Camera Stream &middot; Witsaba</title>
+    <meta
+      name="description"
+      content="Live camera stream viewer."
+    />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/assets/app.css" />
+  </head>
+  <body>
+    <div class="page">
+      <header class="top-bar">
+        <div class="top-bar__brand">
+          <h1 class="top-bar__title">Camera Stream</h1>
+          <span class="top-bar__subtitle" id="subtitle">loading&hellip;</span>
+        </div>
+        <nav class="top-bar__nav" aria-label="Primary">
+          <a class="top-bar__link" href="/">Home</a>
+          <a class="top-bar__link" href="/devices">Devices</a>
+          <a class="top-bar__link" href="/stream" aria-current="page">Stream</a>
+        </nav>
+      </header>
+
+      <main>
+        <section class="panel">
+          <div class="panel__head">
+            <h2 class="panel__title">Live Stream</h2>
+            <span
+              class="status-chip status-chip--info"
+              id="status-chip"
+              role="status"
+            >
+              <span class="status-chip__dot" aria-hidden="true"></span>
+              <span data-status-label>checking</span>
+            </span>
+          </div>
+          <div class="panel__body">
+            <div class="stream-viewer" id="viewer-host">
+              <div class="stream-viewer__stage" id="stream-stage">
+                <img
+                  class="stream-viewer__image"
+                  id="stream-image"
+                  src=""
+                  alt="Camera stream"
+                />
+                <p class="stream-viewer__placeholder" id="stream-placeholder">
+                  Connecting to camera&hellip;
+                </p>
+              </div>
+              <div class="stream-viewer__controls">
+                <span id="frame-counter">0 frames</span>
+                <button
+                  class="stream-btn stream-btn--danger"
+                  id="stop-btn"
+                  type="button"
+                  disabled
+                >
+                  Stop
+                </button>
+              </div>
+              <p class="stream-viewer__notice" id="notice-single-viewer">
+                The chip allows only one active stream viewer connection at a
+                time. Messaging-core multiplexes many browser sessions onto its
+                single chip socket, so many operators can watch simultaneously.
+              </p>
+              <p class="stream-viewer__notice">
+                While a stream is live the chip&#8217;s /capture endpoint is
+                starved and returns HTTP 503.
+              </p>
+            </div>
+          </div>
+        </section>
+      </main>
+
+      <footer class="page-footer">
+        <span>witsaba &middot; local-home-assitant</span>
+      </footer>
+    </div>
+
+    <script src="/assets/app.js"></script>
+    <script>
+      (function () {
+        /* ---- element refs ------------------------------------------------- */
+        var streamImage = document.getElementById("stream-image");
+        var streamPlaceholder = document.getElementById("stream-placeholder");
+        var statusChip = document.getElementById("status-chip");
+        var frameCounter = document.getElementById("frame-counter");
+        var stopBtn = document.getElementById("stop-btn");
+        var subtitle = document.getElementById("subtitle");
+        var noticeSingleViewer = document.getElementById("notice-single-viewer");
+
+        /* ---- stream state ------------------------------------------------- */
+        var controller = null;
+        var currentMac = null;
+        /* Set when the operator presses Stop. Without it, Stop is undone
+         * within 10s: closeStream() nulls the controller, so the next resume
+         * tick sees "no stream" and helpfully reconnects. Stop has to mean
+         * stop until the operator asks for a different device. */
+        var userStopped = false;
+
+        /* A socket that upgrades successfully but never delivers a frame is
+         * the worst failure mode: HTTP 101, a clean-looking connection, and
+         * nothing on screen. messaging-core can sit in exactly that state when
+         * its chip connection has died without being marked dead, so a new
+         * viewer is registered and never gets a frame. Without this watchdog
+         * the page says "connecting" forever and the operator has no idea
+         * whether the camera, the network, or the gateway is at fault.
+         * 12s is far longer than the ~100ms a healthy 10fps stream needs for
+         * its first frame, so this cannot fire on a working camera. */
+        var NO_FRAME_TIMEOUT_MS = 12000;
+        var noFrameTimer = null;
+
+        function disarmNoFrameWatchdog() {
+          if (noFrameTimer !== null) {
+            clearTimeout(noFrameTimer);
+            noFrameTimer = null;
+          }
+        }
+
+        function armNoFrameWatchdog() {
+          disarmNoFrameWatchdog();
+          noFrameTimer = setTimeout(function () {
+            noFrameTimer = null;
+            witsaba.setStatus(statusChip, "warning", "no frames", true);
+            subtitle.textContent = "connected, no video in 12s";
+          }, NO_FRAME_TIMEOUT_MS);
+        }
+
+        /* ---- helper: close current stream -------------------------------- */
+        function closeStream() {
+          disarmNoFrameWatchdog();
+          if (controller) {
+            controller.close();
+            controller = null;
+          }
+          currentMac = null;
+        }
+
+        /* ---- helper: open stream for a given device ---------------------- */
+        function openStream(mac, deviceName) {
+          /* Guard: witsaba.stream.open throws if mac is missing. */
+          if (!mac) return;
+
+          /* An explicit open (initial load, ?mac=, or a picker choice) clears
+           * any earlier Stop. */
+          userStopped = false;
+
+          /* Close any existing stream first to avoid holding two sockets. */
+          closeStream();
+
+          /* Update subtitle with device name or mac. */
+          if (deviceName) {
+            subtitle.textContent = deviceName;
+          } else {
+            subtitle.textContent = mac;
+          }
+
+          /* Mark placeholder visible; it will be hidden on first frame. */
+          streamPlaceholder.style.display = "";
+
+          /* Disable stop button until stream opens. */
+          stopBtn.disabled = true;
+
+          /* Open the stream. */
+          try {
+            controller = witsaba.stream.open({
+              mac: mac,
+              image: streamImage,
+              onStatus: function (state, detail) {
+                /* Map onStatus states to status-chip variants. */
+                if (state === "connecting") {
+                  witsaba.setStatus(statusChip, "info", "connecting", true);
+                  armNoFrameWatchdog();
+                } else if (state === "live") {
+                  witsaba.setStatus(statusChip, "healthy", "live", false);
+                  disarmNoFrameWatchdog();
+                } else if (state === "reconnecting") {
+                  witsaba.setStatus(statusChip, "warning", "reconnecting", true);
+                  armNoFrameWatchdog();
+                } else if (state === "error") {
+                  witsaba.setStatus(
+                    statusChip,
+                    "error",
+                    detail || "error",
+                    false,
+                  );
+                } else if (state === "stopped") {
+                  witsaba.setStatus(statusChip, "neutral", "stopped", false);
+                  disarmNoFrameWatchdog();
+                }
+              },
+              onFrame: function (stats) {
+                /* Hide placeholder once first frame lands. */
+                streamPlaceholder.style.display = "none";
+                /* Update frame counter. */
+                frameCounter.textContent = stats.frames + " frame" +
+                  (stats.frames === 1 ? "" : "s");
+                /* Video is provably flowing; the watchdog has done its job. */
+                disarmNoFrameWatchdog();
+              },
+              onError: function (err) {
+                /* The WebSocket layer cannot distinguish messaging-core's 404
+                 * for an unknown MAC from a chip that simply is not
+                 * answering, so the chip alone is a weak signal. Say it on the
+                 * page as well as the console -- an operator who mistyped a MAC
+                 * must not be left staring at a blank frame. */
+                var msg = err && err.message ? err.message : String(err);
+                console.error("[stream] error:", msg);
+                if (subtitle && controller) {
+                  subtitle.textContent = "error: " + msg;
+                }
+              },
+            });
+            currentMac = mac;
+            stopBtn.disabled = false;
+          } catch (err) {
+            witsaba.setStatus(statusChip, "error", "init failed", false);
+            console.error("[stream] open failed:", err && err.message
+              ? err.message
+              : String(err));
+          }
+        }
+
+        /* ---- render device picker ---------------------------------------- */
+        function renderPicker(devices) {
+          /* Build a select element listing active devices. */
+          var select = witsaba.el("select", { class: "stream-picker" }, [
+            witsaba.el("option", { value: "", text: "Choose a device\u2026" }),
+          ]);
+
+          devices.forEach(function (device) {
+            var label = device.name
+              ? device.name + " (" + device.mac + ")"
+              : device.mac;
+            select.appendChild(
+              witsaba.el("option", { value: device.mac, text: label }),
+            );
+          });
+
+          /* Deliberately NOT removing the notices here. They are standing
+           * facts about the chip, not per-render decoration: the single-viewer
+           * policy and the /capture 503 are both still true in the picker
+           * path, and that path is exactly when several operators are about to
+           * compete for the same hardware. */
+          return select;
+        }
+
+        /* ---- helper: show picker and resolve device selection ------------- */
+        function showPickerAndWait(devices) {
+          var host = document.getElementById("viewer-host");
+          var stage = document.getElementById("stream-stage");
+
+          if (!stage) return;
+
+          /* Clear existing content from the stage. */
+          stage.replaceChildren();
+
+          /* Hide the controls row while picking. */
+          var controls = document.querySelector(".stream-viewer__controls");
+          if (controls) controls.style.display = "none";
+
+          var select = renderPicker(devices);
+          stage.appendChild(select);
+
+          witsaba.setStatus(statusChip, "info", "select device", false);
+          subtitle.textContent = devices.length + " active";
+          frameCounter.textContent = "0 frames";
+
+          /* When user picks a device, open its stream. */
+          select.addEventListener("change", function () {
+            var mac = select.value;
+            if (!mac) return;
+
+            /* Restore the stage structure for the viewer. */
+            stage.replaceChildren();
+            stage.appendChild(streamImage);
+            stage.appendChild(streamPlaceholder);
+
+            /* Show controls again. */
+            if (controls) controls.style.display = "";
+
+            /* Find the selected device for its name. */
+            var deviceName = null;
+            devices.forEach(function (d) {
+              if (d.mac === mac) deviceName = d.name;
+            });
+
+            openStream(mac, deviceName);
+          });
+        }
+
+        /* ---- device resolution + stream start ---------------------------- */
+        function resolveAndStream() {
+          /* a. Check for ?mac= in query string. */
+          var params = new URLSearchParams(window.location.search);
+          var macParam = params.get("mac");
+          if (macParam) {
+            openStream(macParam, null);
+            return;
+          }
+
+          /* b & c. Fetch active devices. */
+          witsaba
+            .api("/api/devices/active", { timeoutMs: 5000 })
+            .then(function (devices) {
+              if (!Array.isArray(devices)) {
+                throw new Error("API returned a non-array payload");
+              }
+
+              if (devices.length === 0) {
+                /* Zero active devices: show empty state. */
+                var stage = document.getElementById("stream-stage");
+                if (stage) {
+                  stage.replaceChildren();
+                  witsaba.showState(
+                    stage,
+                    "empty",
+                    "No active cameras",
+                    "Nothing has answered on the LAN recently. The discovery worker probes every 60s, so this clears within a few minutes of a camera coming back.",
+                  );
+                }
+                witsaba.setStatus(statusChip, "warning", "no devices", true);
+                subtitle.textContent = "no devices";
+                frameCounter.textContent = "0 frames";
+                stopBtn.disabled = true;
+              } else if (devices.length === 1) {
+                /* Exactly one active device: connect automatically. */
+                var device = devices[0];
+                openStream(device.mac, device.name);
+              } else {
+                /* Multiple active devices: show picker. */
+                showPickerAndWait(devices);
+              }
+            })
+            .catch(function (err) {
+              witsaba.setStatus(statusChip, "error", "api offline", true);
+              subtitle.textContent = "api offline";
+              frameCounter.textContent = "0 frames";
+              stopBtn.disabled = true;
+              console.error("[stream] device fetch failed:", err && err.message
+                ? err.message
+                : String(err));
+            });
+        }
+
+        /* ---- stop button -------------------------------------------------- */
+        stopBtn.addEventListener("click", function () {
+          userStopped = true;
+          closeStream();
+          witsaba.setStatus(statusChip, "neutral", "stopped", false);
+          subtitle.textContent = "stopped";
+          stopBtn.disabled = true;
+          /* Show placeholder again. */
+          streamPlaceholder.style.display = "";
+          frameCounter.textContent = "0 frames";
+        });
+
+        /* ---- lifecycle: pagehide / beforeunload -------------------------- */
+        window.addEventListener("pagehide", function () {
+          closeStream();
+        });
+
+        window.addEventListener("beforeunload", function () {
+          closeStream();
+        });
+
+        /* ---- device resolution: once, never on a timer -------------------- */
+        /* Deliberately NOT calling witsaba.onVisible(resolveAndStream, 10000)
+         * the way devices.html does. resolveAndStream() closes any open
+         * stream before opening the next one, so polling it on a 10s interval
+         * would tear the socket down and re-establish it every 10 seconds: the
+         * operator sees the image blank and reload, and the chip connection
+         * churns for nothing. That polling loop is right for a table of
+         * devices and wrong for a live socket.
+         *
+         * Tab visibility is not this page's job either. witsaba.stream already
+         * closes its socket while the tab is hidden and reconnects when the
+         * tab is visible again; two owners of one lifecycle would fight.
+         *
+         * witsaba.onVisible still fires once immediately on registration,
+         * which is the single initial resolve. */
+        witsaba.onVisible(function () {
+          /* Never disturb a live stream, and never undo an explicit Stop. */
+          if (controller || userStopped) return;
+          resolveAndStream();
+        }, 10000);
+      })();
+    </script>
+  </body>
+</html>

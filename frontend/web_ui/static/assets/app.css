@@ -370,6 +370,28 @@ a:hover { color: var(--color-accent-hover); }
 
 .device-table__scroll { overflow-x: auto; }
 
+/* Per-row deep link into the stream viewer (added with /stream). */
+.device-table__action { text-align: right; }
+
+.device-table__view {
+  display: inline-block;
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-fg);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.device-table__view:hover {
+  background: var(--color-surface-hover);
+  color: var(--color-fg);
+  text-decoration: none;
+}
+
 /* ---- states --------------------------------------------------------------- */
 .state {
   padding: var(--space-6) var(--space-4);
@@ -393,6 +415,148 @@ a:hover { color: var(--color-accent-hover); }
   font-size: var(--text-xs);
   color: var(--color-fg-subtle);
   word-break: break-word;
+}
+
+/* ---- stream viewer -------------------------------------------------------- */
+/* Camera stream viewer panel layout and controls. */
+
+.stream-viewer {
+  /* Full-width panel body for the viewer. */
+}
+
+.stream-viewer__stage {
+  /* Dark backdrop for the frame area. Constrain to container width
+   * so the stage never overflows on mobile. */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-bg);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  /* Cap at 800px wide matching the chip's native 800x600 resolution. */
+  max-width: 800px;
+  min-height: 200px;
+}
+
+.stream-viewer__image {
+  /* The img element receives blob URLs. Do not upscale past native size. */
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+  width: auto;
+  height: auto;
+}
+
+.stream-viewer__placeholder {
+  /* Centred message shown before the first frame arrives. */
+  padding: var(--space-5);
+  text-align: center;
+  color: var(--color-fg-subtle);
+  font-size: var(--text-sm);
+}
+
+.stream-viewer__controls {
+  /* Control row below the stage. */
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) 0 0;
+  flex-wrap: wrap;
+}
+
+.stream-viewer__notice {
+  /* Muted advisory line for single-viewer and /capture starvation notes. */
+  margin: var(--space-2) 0 0;
+  color: var(--color-fg-subtle);
+  font-size: var(--text-xs);
+  line-height: var(--leading-relaxed);
+}
+
+/* Stream picker — select element styled to match the existing form style. */
+.stream-picker {
+  appearance: none;
+  -webkit-appearance: none;
+  display: inline-block;
+  padding: var(--space-2) var(--space-4) var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-fg);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  cursor: pointer;
+  /* Custom dropdown arrow using border trick (no SVG dependency). */
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%235b6470' stroke-width='1.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right var(--space-3) center;
+  padding-right: calc(var(--space-3) + 14px);
+}
+
+.stream-picker:hover {
+  background-color: var(--color-surface-hover);
+  border-color: var(--color-border-strong);
+}
+
+.stream-picker:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+}
+
+/* Stop / close button. */
+.stream-btn {
+  display: inline-block;
+  padding: var(--space-2) var(--space-4);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-fg);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  cursor: pointer;
+  text-decoration: none;
+  user-select: none;
+}
+
+.stream-btn:hover {
+  background: var(--color-surface-hover);
+  text-decoration: none;
+}
+
+.stream-btn:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+}
+
+.stream-btn--danger {
+  border-color: var(--color-error);
+  color: var(--color-error);
+  background: var(--color-error-soft);
+}
+
+.stream-btn--danger:hover {
+  background: var(--color-error);
+  color: var(--color-fg-inverse);
+}
+
+/* Responsive: stage must not overflow its container on a phone. */
+@media (max-width: 480px) {
+  .stream-viewer__stage {
+    border-radius: 0;
+    margin: 0 calc(-1 * var(--space-4));
+  }
+
+  .stream-viewer__controls {
+    padding: var(--space-3) var(--space-4) 0;
+  }
+}
+
+/* Respect prefers-reduced-motion for any viewer animation. */
+@media (prefers-reduced-motion: reduce) {
+  .stream-viewer__image,
+  .stream-viewer__stage {
+    animation: none;
+    transition: none;
+  }
 }
 
 /* ---- footer --------------------------------------------------------------- */

@@ -142,6 +142,21 @@ else
         bad "proxy_buffering not disabled; adds latency to live frames"
     fi
 
+    # `/stream` is BOTH the viewer page and the stem of the `location /stream/`
+    # proxy prefix. nginx issues a trailing-slash redirect for any URI that is
+    # the stem of a prefix location, and it does so BEFORE try_files runs. So
+    # without an exact-match block, `/stream` is 301'd to `/stream/`, which
+    # lands in the proxy and 404s at the gateway -- while stream.html sits in
+    # the document root serving 200 at /stream.html the entire time and is
+    # never consulted. Observed on the Pi: /api and /assets redirect for the
+    # same reason, while /devices (no matching prefix) serves 200.
+    if grep -qE '^\s*location = /stream\s*\{' "$NGINX_CONF" \
+        && grep -q 'try_files /stream\.html' "$NGINX_CONF"; then
+        ok "exact 'location = /stream' serves the viewer page ahead of the proxy prefix"
+    else
+        bad "no exact 'location = /stream'; /stream 301s to /stream/ and the viewer page 404s"
+    fi
+
     # Caching a shell that references new asset names breaks deploys.
     if grep -q 'no-store' "$NGINX_CONF"; then
         ok "html is marked no-store"
@@ -224,6 +239,29 @@ else
     else
         bad "unknown /api path returned $nf, expected a proxied 404"
     fi
+
+    # The viewer page must be reachable at /stream, not 301'd into the proxy
+    # prefix. This is the regression the exact-match block above prevents.
+    stream_code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 \
+        "http://127.0.0.1:$LISTEN_PORT/stream")
+    if [ "$stream_code" = "200" ]; then
+        body=$(curl -s --max-time 5 "http://127.0.0.1:$LISTEN_PORT/stream")
+        case "$body" in
+            *"Camera stream"*) ok "GET /stream serves the camera viewer page" ;;
+            *) bad "GET /stream returned 200 but not the viewer page" ;;
+        esac
+    else
+        bad "GET /stream returned $stream_code, expected 200 (did it 301 to /stream/?)"
+    fi
+
+    # The socket path must still be proxied, not served as a file.
+    sock=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 \
+        "http://127.0.0.1:$LISTEN_PORT/stream/000000000000")
+    case "$sock" in
+        404|400) ok "GET /stream/<mac> still reaches the gateway (HTTP $sock)" ;;
+        301) bad "/stream/<mac> redirected; the exact-match block is too broad" ;;
+        *) bad "/stream/<mac> returned $sock, expected the gateway's own status" ;;
+    esac
 fi
 
 echo ""
