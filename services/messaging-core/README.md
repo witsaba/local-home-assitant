@@ -221,8 +221,7 @@ docker build -t witsaba/messaging-core:local \
 | JetStream frame persistence | Requires `NATS_DATA_DIR` config + consumer code |
 | Auth on WS endpoint | Closed LAN assumption; matches existing stack |
 | Frame buffering / DVR (last N seconds) | JetStream or Redis follow-up |
-| Frontend integration | Separate Qwik workstream |
-| `ws://pi:8080/stream/{mac}` → Qwik UI | Frontend subscribes to WS, renders camera stream |
+| `ws://pi:8080/stream/{mac}` consumer | Shipped: `frontend/web_ui/static/stream.html` subscribes over the nginx-proxied `/stream/` and paints the frames. See `odd/tasks/camera-stream-ui.md`. |
 | Healthcheck HTTP endpoint | `/healthz` is sufficient for compose healthcheck |
 | Multi-chip reconnect (same MAC from different Pis) | Home scale: one Pi owns one fleet |
 

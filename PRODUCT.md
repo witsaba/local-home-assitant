@@ -8,14 +8,20 @@ web
 
 ## Stack
 
-Qwik 1.19.2 + Qwik City + Vite 7, served by the Node.js dev server in
-`frontend/web_ui/`. The web UI is a sibling of the Go services in
-`services/workers` and `services/messaging-core`; it talks to the same
-Postgres database and the same NATS message bus. Containerized via the
-root `docker-compose.yml` (the `web_ui` service depends on `postgres`
-being healthy). Deployed on a Raspberry Pi on a home LAN; the dev
-target is Linux with `network_mode: host` so the UI is reachable at
-`http://<pi-hostname>:5173/`.
+Plain static HTML, CSS and JavaScript in `frontend/web_ui/static/` — three
+pages, one stylesheet, one script. No framework, no build step, no
+`node_modules`, and no JavaScript runtime on the serving path. nginx copies
+the tree to `~/.witsaba/nginx/html` and serves it from disk
+(`scripts/install/13-nginx.sh`), supervised as `witsaba-nginx.service` in
+user space. It also reverse-proxies `/api/*` to messaging-core on 8081 and
+`/stream/*` to the WebSocket gateway on 8080, so the browser makes one
+same-origin request and nothing needs CORS.
+
+The web UI is a sibling of the Go services in `services/workers` and
+`services/messaging-core`; it reads the same Postgres database through those
+services. The backend runs containerized via the root `docker-compose.yml`
+(postgres, messaging-core, workers). Deployed on a Raspberry Pi on a home
+LAN; the UI is reachable at `http://<pi-hostname>:4173/`.
 
 ## Users
 
@@ -68,18 +74,20 @@ Confirmed capabilities on the path to a usable home page:
 - Messaging-core is a NATS-based message bus between services.
 - Postgres is the system of record; roles are scoped
   (`pg-admin`, `pg-worker`, `pg-messaging-core`).
-- Docker Compose orchestrates the full stack with healthcheck-based
-  service ordering (`web_ui` waits for `postgres` to be healthy).
-- The web UI is currently a single home route; the four feature
-  cards (Devices, Discovery, Logs, Settings) are placeholders.
+- Docker Compose runs the three backend services with healthcheck-based
+  service ordering (`workers` waits for `postgres` to be healthy). The
+  front-end is not a container: nginx runs in user space beside them.
+- The web UI is three pages: home, device list, camera stream. Two of
+  the four feature cards work; Discovery, Logs and Settings are
+  placeholders with no page behind them yet.
 
 Constraints:
 
 - Linux host networking (the stack assumes the Pi, not Docker
   Desktop Mac, is the deployment target).
-- Bun runtime is not used (Qwik's Bun adapter has known
-  `routeAction$` bugs).
-- pnpm + Node.js 22.x is the only supported toolchain for the UI.
+- There is no front-end toolchain. Changing the UI means editing HTML,
+  CSS or JavaScript by hand and re-running `13-nginx.sh`; there is no
+  package manager, no bundler and no test runner in the serving path.
 - The operator does not want noise: no orchestrations, no
   decorative motion, no gamified feedback.
 
@@ -93,16 +101,18 @@ operator surfaces.
 ## Evidence on Hand
 
 - The witsaba repository at the current commit (see git log) with
-  the full Go service stack in `services/` and the front-end
-  scaffold at `frontend/web_ui/`.
-- The root `docker-compose.yml` showing the four-service topology
-  and the `web_ui` healthcheck-gated dependency on `postgres`.
+  the full Go service stack in `services/` and the static front-end
+  in `frontend/web_ui/static/`.
+- The root `docker-compose.yml` showing the three-service backend
+  topology.
+- `scripts/install/13-nginx.sh` and `12-systemd-services.sh`, which
+  deploy and supervise the front-end; `test-nginx-config.sh` asserts
+  the generated config and the deployed tree.
 - `env.example` documenting the environment variables, including
   `DISCOVERY_INTERVAL_SECONDS` and `POSTGRES_*`.
-- `odd/tasks/qwik-web-ui-scaffold.md` documenting the scaffold
-  work-unit history and verification matrix.
-- The empty Qwik starter at `frontend/web_ui/` (one home route,
-  four placeholder cards) is the only existing UI surface.
+- `odd/tasks/plain-frontend-nginx.md` and `odd/tasks/camera-stream-ui.md`
+  documenting how the static front-end replaced the framework one and how
+  the stream viewer was built.
 
 State of evidence the front end cannot fabricate:
 
