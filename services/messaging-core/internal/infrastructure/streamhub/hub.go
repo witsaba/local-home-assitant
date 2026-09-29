@@ -25,6 +25,17 @@ const (
 	// reconnectBaseDelay is the initial delay between reconnection attempts.
 	// Each subsequent attempt doubles the delay: 1s, 2s, 4s, 8s, 16s.
 	reconnectBaseDelay = 1 * time.Second
+
+	// viewerWriteTimeout bounds a single frame write to one viewer.
+	//
+	// Without it, a viewer that vanished without the server noticing (which
+	// used to be the normal case: nothing deregistered, see the DeregisterViewer
+	// wiring) leaves a socket whose kernel buffers eventually fill. The write
+	// then blocks FOREVER inside WriteMessage, and because this loop is
+	// synchronous and holds no lock, the chip read loop is never drained, the
+	// chip's own send buffer backs up, and the chip stops streaming. One dead
+	// viewer therefore silenced the camera for everybody.
+	viewerWriteTimeout = 5 * time.Second
 )
 
 // DeviceRepo is the interface for querying device information.
@@ -308,6 +319,15 @@ func (h *CameraHub) broadcastToViewers(state *cameraState, frame []byte) {
 	state.mu.Unlock()
 
 	for _, conn := range viewers {
+		// Bound every write. A viewer that has gone away must fail this call
+		// rather than wedge the relay for everyone else.
+		if err := conn.SetWriteDeadline(time.Now().Add(viewerWriteTimeout)); err != nil {
+			state.mu.Lock()
+			delete(state.viewers, conn)
+			state.mu.Unlock()
+			go conn.Close()
+			continue
+		}
 		if err := conn.WriteMessage(websocket.BinaryMessage, frame); err != nil {
 			h.log.Debug("streamhub: failed to write to viewer, removing",
 				ports.Field{Key: "mac", Value: state.mac},
@@ -324,12 +344,24 @@ func (h *CameraHub) broadcastToViewers(state *cameraState, frame []byte) {
 }
 
 // onChipDisconnected is called by the chip client when the chip disconnects.
-// It attempts to reconnect with exponential backoff.
+// It clears state.client and attempts to reconnect with exponential backoff.
 func (h *CameraHub) onChipDisconnected(state *cameraState) {
 	state.mu.Lock()
 	mac := state.mac
 	chipIP := state.ip
 	client := state.client
+	// Drop the stale pointer.
+	//
+	// This is load-bearing. RegisterViewer decides whether to dial the chip
+	// with `needsConnect := state.client == nil`, so leaving a dead client
+	// parked here means every LATER viewer is registered onto a connection
+	// that can never produce a frame: the socket upgrades 101, looks healthy
+	// in every log and in the nginx access log, and then delivers nothing,
+	// forever. There is no error to see, because nothing failed. Measured on
+	// the Pi: viewer_count stuck above zero, zero chip sockets held, zero
+	// reconnect attempts, zero frames, while all three chips answered
+	// /capture with valid JPEGs.
+	state.client = nil
 	state.mu.Unlock()
 
 	if client == nil {

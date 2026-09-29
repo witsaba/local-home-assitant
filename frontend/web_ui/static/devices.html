@@ -6,7 +6,7 @@
     <title>Devices &middot; Witsaba</title>
     <meta
       name="description"
-      content="Devices seen on the LAN in the last 60 seconds."
+      content="Devices seen on the LAN in the last few minutes."
     />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="/assets/app.css" />
@@ -46,8 +46,8 @@
 
       <footer class="page-footer">
         <span
-          >A device is listed when it was seen in the last 60 seconds. The page
-          refreshes every 10s.</span
+          >A device is listed when the discovery worker has seen it recently. The
+          page refreshes every 10s.</span
         >
         <span id="last-updated"></span>
       </footer>
@@ -154,7 +154,7 @@
                   host,
                   "empty",
                   "No active devices",
-                  "Nothing has answered on the LAN in the last 60 seconds. The discovery worker probes every 60s.",
+                  "Nothing has answered on the LAN recently. The discovery worker probes every 60s, so this clears within a few minutes of a camera coming back.",
                 );
                 witsaba.setStatus(chip, "warning", "0 active", true);
                 subtitle.textContent = "0 active";

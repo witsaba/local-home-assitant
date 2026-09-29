@@ -149,3 +149,34 @@ func TestListActive_WrongMethod(t *testing.T) {
 		t.Errorf("status: got %d, want %d", rr.Code, http.StatusMethodNotAllowed)
 	}
 }
+
+// TestActiveWindowExceedsDiscoveryInterval guards the relationship that caused
+// the flapping device list.
+//
+// When the API's staleness cutoff equals the discovery worker's scan interval,
+// a device is dropped from the list just before its own refresh lands. The
+// window must be a multiple of the interval, large enough to absorb a missed
+// scan, so that the list is stable between cycles.
+func TestActiveWindowExceedsDiscoveryInterval(t *testing.T) {
+	if maxActiveAge <= defaultDiscoveryInterval {
+		t.Fatalf(
+			"maxActiveAge (%s) must exceed the discovery interval (%s), "+
+				"otherwise devices flap in and out of /api/devices/active",
+			maxActiveAge, defaultDiscoveryInterval,
+		)
+	}
+	if r := maxActiveAge % defaultDiscoveryInterval; r != 0 {
+		t.Errorf(
+			"maxActiveAge (%s) should be a whole multiple of the discovery "+
+				"interval (%s) so the margin is predictable; remainder %s",
+			maxActiveAge, defaultDiscoveryInterval, r,
+		)
+	}
+	if maxActiveAge < 2*defaultDiscoveryInterval {
+		t.Errorf(
+			"maxActiveAge (%s) leaves no room for a single missed scan at a %s "+
+				"interval; want at least 2x",
+			maxActiveAge, defaultDiscoveryInterval,
+		)
+	}
+}
