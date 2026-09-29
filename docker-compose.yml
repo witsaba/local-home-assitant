@@ -29,10 +29,12 @@
 #
 # Service order (depends_on graph):
 #   postgres (healthy) ── messaging-core (started) ── workers (healthy)
-#                                            └── web_ui (healthy)
-#   web_ui only depends on postgres today. messaging-core has no
-#   healthcheck yet; the comment in web_ui.depends_on explains how to
-#   add the edge when messaging-core grows one.
+#
+# There is no front-end service. The operator UI is plain static HTML
+# served by nginx from scripts/install/13-nginx.sh, supervised as
+# witsaba-nginx.service by scripts/install/12-systemd-services.sh. It
+# runs in user space alongside the services rather than in a container,
+# and it needs nothing from this file. See scripts/install/README.md.
 
 name: witsaba-local-home
 
@@ -161,65 +163,3 @@ services:
       PG_DATABASE: ${PG_DATABASE:-${POSTGRES_DB:-witsaba}}
       PG_USER: ${PG_USER:-pg-worker}
       PG_WORKER_PASSWORD: ${PG_WORKER_PASSWORD:?PG_WORKER_PASSWORD must be set in .env}
-
-  # --------------------------------------------------------------------------
-  # web_ui: Qwik + Qwik City front-end (services/frontend/web_ui/).
-  #
-  # The Qwik dev server starts only after Postgres is healthy. It does NOT
-  # currently depend on messaging-core because (a) messaging-core has no
-  # healthcheck yet, and (b) the v1 UI does not talk to NATS. When the
-  # messaging-core healthcheck lands, add:
-  #     depends_on:
-  #       postgres:        { condition: service_healthy }
-  #       messaging-core:  { condition: service_healthy }
-  #
-  # Network model: `network_mode: host` so the dev server is reachable on
-  # the host's :5173 (Linux target only; on Docker Desktop Mac the port
-  # is still reachable at localhost:5173 because Docker Desktop forwards
-  # host ports on its VM).
-  #
-  # The container's CMD runs the Vite dev server. Override with
-  # `pnpm preview` for the production build artefacts (see the Dockerfile
-  # for the build stage that produces dist/ + server/).
-  # --------------------------------------------------------------------------
-  web_ui:
-    build:
-      context: ./frontend/web_ui
-      dockerfile: Dockerfile
-      args:
-        VERSION: ${VERSION:-0.1.0-dev}
-        GIT_HEAD: ${GIT_HEAD:-unknown}
-    image: witsaba/web-ui:local
-    container_name: witsaba-web-ui
-    init: true                       # tini as PID 1 — clean signal handling
-    network_mode: host               # see file header; Linux only
-    restart: unless-stopped
-    depends_on:
-      postgres:
-        condition: service_healthy   # UI only starts once the DB accepts connections
-    environment:
-      # NODE_ENV=development tells the Qwik dev server to keep HMR and
-      # dev diagnostics on. Override per-deployment if you switch to a
-      # production CMD.
-      NODE_ENV: development
-      HOST: 0.0.0.0
-      PORT: 5173
-      # The UI itself does not connect to Postgres in the v1 skeleton,
-      # but we keep PG_* env vars here so future feature cards can
-      # query the database without a config change.
-      PG_HOST: ${PG_HOST:-127.0.0.1}
-      PG_PORT: ${PG_PORT:-${POSTGRES_PORT:-5432}}
-      PG_DATABASE: ${PG_DATABASE:-${POSTGRES_DB:-witsaba}}
-      PG_USER: ${PG_USER:-pg-worker}
-      PG_PASSWORD: ${PG_WORKER_PASSWORD:?PG_WORKER_PASSWORD must be set in .env}
-    healthcheck:
-      # Curl the dev server's index. --fail makes curl exit non-zero on
-      # 4xx/5xx, --max-time bounds the wait. /tmp is writable in the
-      # node:22-alpine image.
-      test:
-        - "CMD-SHELL"
-        - "wget -qO- http://127.0.0.1:5173/ >/dev/null 2>&1 || exit 1"
-      interval: 15s
-      timeout: 5s
-      retries: 5
-      start_period: 30s              # dev server warm-up + initial Vite transform
