@@ -96,6 +96,8 @@ Not touched: `embedded/iot_cams/**`, `services/messaging-core/**`,
       repository's own checks and close the feature document.
 - [x] **T4** nginx exact-match `location = /stream` + `= /stream.html`
       no-store, with regression tests. Found by deploying to the Pi.
+- [x] **T5** no-frame watchdog in `stream.html` so a connected-but-silent
+      stream reports itself instead of hanging. Found by the operator.
 
 ## Acceptance criteria
 
@@ -356,6 +358,27 @@ This is outside this feature's scope (`services/messaging-core/**` was
 explicitly excluded, and the fix is Go service work plus tests). It needs its
 own change: a read loop per viewer that deregisters on close, and a write
 deadline on the relay.
+
+### T5 — no-frame watchdog, found by the operator hitting the wedge ✅
+
+The operator loaded `/stream?mac=…` in Safari and saw **nothing**, while the
+WebSocket upgraded cleanly (`101` in the nginx access log). Diagnosis showed
+messaging-core held **no TCP connection to any chip** and had logged **0
+reconnect attempts** since the chip connection died — the exact state the
+`messaging-core` defect above produces, where `state.client` stays non-NULL so
+every new viewer skips `connectChip` and waits forever on an empty socket.
+`systemctl --user restart witsaba-messaging-core` restored all three cameras.
+
+But part of this was **my** fault, and it is the part I could fix. A socket
+that upgrades and then never delivers a frame left the page saying
+"connecting" **indefinitely**, with no indication of whether the camera, the
+network, or the gateway was at fault. `stream.html` now arms a 12 s no-frame
+watchdog: far longer than the ~100 ms a healthy 10 fps stream needs, so it
+cannot fire on a working camera, and it reports "no frames" instead of hanging.
+Disarmed on the first frame, on `live`, and on close.
+
+Behavioural harness grew from 21 to 28 assertions to cover it, including the
+wedged-gateway case and proof that a healthy stream leaves no timer pending.
 
 ## Verification evidence
 

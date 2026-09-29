@@ -102,8 +102,37 @@
          * stop until the operator asks for a different device. */
         var userStopped = false;
 
+        /* A socket that upgrades successfully but never delivers a frame is
+         * the worst failure mode: HTTP 101, a clean-looking connection, and
+         * nothing on screen. messaging-core can sit in exactly that state when
+         * its chip connection has died without being marked dead, so a new
+         * viewer is registered and never gets a frame. Without this watchdog
+         * the page says "connecting" forever and the operator has no idea
+         * whether the camera, the network, or the gateway is at fault.
+         * 12s is far longer than the ~100ms a healthy 10fps stream needs for
+         * its first frame, so this cannot fire on a working camera. */
+        var NO_FRAME_TIMEOUT_MS = 12000;
+        var noFrameTimer = null;
+
+        function disarmNoFrameWatchdog() {
+          if (noFrameTimer !== null) {
+            clearTimeout(noFrameTimer);
+            noFrameTimer = null;
+          }
+        }
+
+        function armNoFrameWatchdog() {
+          disarmNoFrameWatchdog();
+          noFrameTimer = setTimeout(function () {
+            noFrameTimer = null;
+            witsaba.setStatus(statusChip, "warning", "no frames", true);
+            subtitle.textContent = "connected, no video in 12s";
+          }, NO_FRAME_TIMEOUT_MS);
+        }
+
         /* ---- helper: close current stream -------------------------------- */
         function closeStream() {
+          disarmNoFrameWatchdog();
           if (controller) {
             controller.close();
             controller = null;
@@ -145,10 +174,13 @@
                 /* Map onStatus states to status-chip variants. */
                 if (state === "connecting") {
                   witsaba.setStatus(statusChip, "info", "connecting", true);
+                  armNoFrameWatchdog();
                 } else if (state === "live") {
                   witsaba.setStatus(statusChip, "healthy", "live", false);
+                  disarmNoFrameWatchdog();
                 } else if (state === "reconnecting") {
                   witsaba.setStatus(statusChip, "warning", "reconnecting", true);
+                  armNoFrameWatchdog();
                 } else if (state === "error") {
                   witsaba.setStatus(
                     statusChip,
@@ -158,6 +190,7 @@
                   );
                 } else if (state === "stopped") {
                   witsaba.setStatus(statusChip, "neutral", "stopped", false);
+                  disarmNoFrameWatchdog();
                 }
               },
               onFrame: function (stats) {
@@ -166,6 +199,8 @@
                 /* Update frame counter. */
                 frameCounter.textContent = stats.frames + " frame" +
                   (stats.frames === 1 ? "" : "s");
+                /* Video is provably flowing; the watchdog has done its job. */
+                disarmNoFrameWatchdog();
               },
               onError: function (err) {
                 /* The WebSocket layer cannot distinguish messaging-core's 404
