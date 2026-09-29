@@ -1,4 +1,5 @@
 #!/bin/bash
+# shellcheck disable=SC1090  # witsaba.env is generated at install time
 # =============================================================================
 # 12-systemd-services.sh - Create systemd *user* units for the witsaba stack
 # =============================================================================
@@ -22,7 +23,8 @@ for candidate in \
     [ -f "$candidate" ] && BREW_BIN="$candidate" && break
 done
 [ -z "$BREW_BIN" ] && { echo "[x] Homebrew not found. Run 00-brew.sh first." >&2; exit 1; }
-export HOMEBREW_PREFIX="$(dirname "$(dirname "$BREW_BIN")")"
+HOMEBREW_PREFIX="$(dirname "$(dirname "$BREW_BIN")")"
+export HOMEBREW_PREFIX
 export PATH="$HOMEBREW_PREFIX/bin:$PATH"
 
 # Shared helpers (logging, available_mem_mb). Sourced before anything uses them.
@@ -65,9 +67,10 @@ fi
 log_ok "nginx  : $NGINX_BIN ($("$NGINX_BIN" -v 2>&1 | sed 's|.*nginx/||;s/ .*//'))"
 log_ok "pg_ctl : $PG_CTL"
 
-for bin in "$PG_CTL"; do
-    [ -x "$bin" ] || { log_err "Required binary not executable: $bin"; exit 1; }
-done
+if [ ! -x "$PG_CTL" ]; then
+    log_err "pg_ctl is not executable: $PG_CTL"
+    exit 1
+fi
 
 SYSTEMD_DIR="$HOME/.config/systemd/user"
 mkdir -p "$SYSTEMD_DIR"

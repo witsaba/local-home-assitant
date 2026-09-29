@@ -1,4 +1,5 @@
 #!/bin/bash
+# shellcheck disable=SC1090  # sources _lib.sh via $SCRIPT_DIR, and a temp file
 # =============================================================================
 # test-password-gen.sh - Verify _lib.sh without installing anything
 # =============================================================================
@@ -64,7 +65,7 @@ fi
 info "uniqueness"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
-for i in $(seq 1 400); do
+for _ in $(seq 1 400); do
     gen_secret 24 >> "$tmp/samples.txt"
     printf '\n' >> "$tmp/samples.txt"
 done

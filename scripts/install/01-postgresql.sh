@@ -52,7 +52,8 @@ if [ -z "$BREW_BIN" ]; then
     exit 1
 fi
 
-export HOMEBREW_PREFIX="$(dirname "$(dirname "$BREW_BIN")")"
+HOMEBREW_PREFIX="$(dirname "$(dirname "$BREW_BIN")")"
+export HOMEBREW_PREFIX
 export PATH="$HOMEBREW_PREFIX/bin:$PATH"
 
 # -----------------------------------------------------------------------------
@@ -107,7 +108,6 @@ log_ok "Binaries: $PG_PREFIX/bin"
 
 INITDB="$PG_PREFIX/bin/initdb"
 PG_CTL="$PG_PREFIX/bin/pg_ctl"
-PSQL="$PG_PREFIX/bin/psql"
 
 # -----------------------------------------------------------------------------
 # 2. Data directory

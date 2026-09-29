@@ -19,7 +19,7 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR" || exit 1
 
-RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
+RED='\033[0;31m'; GREEN='\033[0;32m'; NC='\033[0m'
 pass=0; fail=0
 ok()  { printf '  %sPASS%s %s\n' "$GREEN" "$NC" "$1"; pass=$((pass+1)); }
 bad() { printf '  %sFAIL%s %s\n' "$RED" "$NC" "$1"; fail=$((fail+1)); }

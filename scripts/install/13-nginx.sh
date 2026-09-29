@@ -40,7 +40,8 @@ if [ -z "$BREW_BIN" ]; then
     echo "[x] Homebrew not found. Run 00-brew.sh first." >&2
     exit 1
 fi
-export HOMEBREW_PREFIX="$(dirname "$(dirname "$BREW_BIN")")"
+HOMEBREW_PREFIX="$(dirname "$(dirname "$BREW_BIN")")"
+export HOMEBREW_PREFIX
 export PATH="$HOMEBREW_PREFIX/bin:$PATH"
 
 echo ""
@@ -221,9 +222,9 @@ cat << CONF_MID
 
         location / {
             # Clean URLs: /devices must resolve to devices.html on disk.
-            # '$uri $uri/' alone returns 404, because the file has the
-            # extension. '$uri.html' is tried before the directory form so a
-            # page always wins over a same-named directory.
+            # '\$uri \$uri/' alone returns 404, because the file has the
+            # extension. '\$uri.html' is tried before the directory form so
+            # a page always wins over a same-named directory.
             try_files \$uri \$uri.html \$uri/ =404;
         }
 

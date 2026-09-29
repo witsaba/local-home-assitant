@@ -43,7 +43,8 @@ if [ -z "$BREW_BIN" ]; then
     echo "[x] Homebrew not found. Run 00-brew.sh first." >&2
     exit 1
 fi
-export HOMEBREW_PREFIX="$(dirname "$(dirname "$BREW_BIN")")"
+HOMEBREW_PREFIX="$(dirname "$(dirname "$BREW_BIN")")"
+export HOMEBREW_PREFIX
 export PATH="$HOMEBREW_PREFIX/bin:$PATH"
 
 echo ""

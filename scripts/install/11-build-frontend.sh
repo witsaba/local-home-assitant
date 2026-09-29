@@ -16,7 +16,6 @@ INSTALL_DIR="$HOME/.witsaba"
 # =============================================================================
 # Find and set up Homebrew
 # =============================================================================
-BREW_FOUND=false
 BREW_PATHS=(
     "/home/linuxbrew/.linuxbrew/bin/brew"
     "$HOME/.linuxbrew/bin/brew"
@@ -25,9 +24,10 @@ BREW_PATHS=(
 
 for brew_path in "${BREW_PATHS[@]}"; do
     if [ -f "$brew_path" ]; then
-        export HOMEBREW_PREFIX="$(dirname "$(dirname "$brew_path")")"
-        export PATH="$(dirname "$brew_path"):$PATH"
-        BREW_FOUND=true
+        HOMEBREW_PREFIX="$(dirname "$(dirname "$brew_path")")"
+        export HOMEBREW_PREFIX
+        PATH="$(dirname "$brew_path"):$PATH"
+        export PATH
         break
     fi
 done

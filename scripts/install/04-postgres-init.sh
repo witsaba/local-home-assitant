@@ -1,4 +1,5 @@
 #!/bin/bash
+# shellcheck disable=SC1090  # witsaba.env is generated at install time
 # =============================================================================
 # 04-postgres-init.sh - Create the witsaba database, roles and schema
 # =============================================================================
@@ -36,7 +37,8 @@ for candidate in \
     [ -f "$candidate" ] && BREW_BIN="$candidate" && break
 done
 [ -z "$BREW_BIN" ] && { echo "[x] Homebrew not found. Run 00-brew.sh first." >&2; exit 1; }
-export HOMEBREW_PREFIX="$(dirname "$(dirname "$BREW_BIN")")"
+HOMEBREW_PREFIX="$(dirname "$(dirname "$BREW_BIN")")"
+export HOMEBREW_PREFIX
 export PATH="$HOMEBREW_PREFIX/bin:$PATH"
 
 # Colors

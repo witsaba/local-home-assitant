@@ -7,7 +7,6 @@
 
 set -e
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INSTALL_DIR="$HOME/.witsaba"
 
 # Colors
@@ -15,7 +14,6 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 BLUE='\033[0;34m'
 YELLOW='\033[1;33m'
-BOLD='\033[1m'
 NC='\033[0m'
 
 log_info() { echo -e "${BLUE}[i]${NC} $1"; }
@@ -153,6 +151,7 @@ if [ -f "$HOME/.bashrc" ]; then
     sed -i '/eval.*brew.*--env/d' "$HOME/.bashrc" 2>/dev/null || true
     sed -i '/HOMEBREW_PREFIX/d' "$HOME/.bashrc" 2>/dev/null || true
     
+    # shellcheck disable=SC2088  # tilde is display text, not a path
     log_ok "~/.bashrc cleaned"
     log_info "Backup saved: ~/.bashrc.bak.*"
 fi

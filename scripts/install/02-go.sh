@@ -7,8 +7,6 @@
 
 set -e
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
 # =============================================================================
 # Find and set up Homebrew
 # =============================================================================
@@ -21,8 +19,10 @@ BREW_PATHS=(
 
 for brew_path in "${BREW_PATHS[@]}"; do
     if [ -f "$brew_path" ]; then
-        export HOMEBREW_PREFIX="$(dirname "$(dirname "$brew_path")")"
-        export PATH="$(dirname "$brew_path"):$PATH"
+        HOMEBREW_PREFIX="$(dirname "$(dirname "$brew_path")")"
+        export HOMEBREW_PREFIX
+        PATH="$(dirname "$brew_path"):$PATH"
+        export PATH
         BREW_FOUND=true
         break
     fi
@@ -34,7 +34,6 @@ if [ "$BREW_FOUND" != true ]; then
 fi
 
 # Colors
-RED='\033[0;31m'
 GREEN='\033[0;32m'
 BLUE='\033[0;34m'
 NC='\033[0m'
