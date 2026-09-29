@@ -51,23 +51,26 @@ echo ""
 # How often to print a heartbeat while something slow runs.
 HEARTBEAT="${WITSABA_HEARTBEAT_SECS:-20}"
 
-# V8 heap ceiling. A Qwik/Vite build is the most allocation-hungry thing in
-# the install, and on a 1GB box the default "grow until the machine is out"
-# behaviour gets the process OOM-killed instead of completing.
-export NODE_OPTIONS="--max-old-space-size=${WITSABA_NODE_HEAP_MB:-512}"
-
 # -----------------------------------------------------------------------------
-# Preflight
+# Node preflight
+#
+# Run before pnpm install: a wrong Node version produces a confusing failure
+# deep inside Vite's config loader, minutes into the step, after a 7 minute
+# dependency download. Fail immediately and say why instead.
 # -----------------------------------------------------------------------------
-if ! command -v pnpm &> /dev/null; then
-    log_err "pnpm not found. Run 03-node.sh first."
+if ! preflight_node; then
     exit 1
 fi
 
-cd "$REPO_DIR/frontend/web_ui" || { log_err "no such directory: frontend/web_ui"; exit 1; }
+# -----------------------------------------------------------------------------
+# V8 heap ceiling. A Qwik/Vite build is the most allocation-hungry thing in
+# the install, and on a 1GB box the default "grow until the machine is out"
+# behaviour gets the process OOM-killed instead of completing.
+# -----------------------------------------------------------------------------
+export NODE_OPTIONS="--max-old-space-size=${WITSABA_NODE_HEAP_MB:-512}"
 
-log_info "node        : $(node --version)"
-log_info "pnpm        : $(pnpm --version)"
+log_info "node        : $("$NODE_BIN" --version)  ($NODE_BIN)"
+log_info "pnpm        : $("$PNPM_BIN" --version 2>/dev/null || echo '?')  ($PNPM_BIN)"
 log_info "NODE_OPTIONS: $NODE_OPTIONS"
 log_info "available   : $(available_mem_mb || echo '?') MB RAM"
 echo ""
@@ -81,14 +84,32 @@ echo ""
 # -----------------------------------------------------------------------------
 log_info "── dependencies ─────────────────────────────"
 run_progress "pnpm install" "$HEARTBEAT" \
-    pnpm install --frozen-lockfile
+    "$PNPM_BIN" install --frozen-lockfile
+
+# -----------------------------------------------------------------------------
+# Second, decisive check: require the exact module that broke the build.
+# This catches any future drift where the Node floor moves again, and it
+# cannot be fooled by a stale version string.
+# -----------------------------------------------------------------------------
+cd "$REPO_DIR/frontend/web_ui" || { log_err "no such directory: frontend/web_ui"; exit 1; }
+if ! "$NODE_BIN" -e 'require("undici")' >/dev/null 2>&1; then
+    log_err "this dependency tree cannot be loaded by $("$NODE_BIN" --version)"
+    log_err ""
+    log_err "require('undici') fails. undici is pulled in by @builder.io/qwik-city"
+    log_err "and calls webidl.util.markAsUncloneable, which needs node >= $WITSABA_NODE_MIN_VERSION."
+    "$NODE_BIN" -e 'require("undici")' 2>&1 | head -6 | while read -r line; do
+        log_err "  $line"
+    done
+    exit 1
+fi
+log_ok "undici loads under $("$NODE_BIN" --version)"
 
 # -----------------------------------------------------------------------------
 # Build
 # -----------------------------------------------------------------------------
 log_info "── production build ──────────────────────────"
 run_progress "pnpm run build" "$HEARTBEAT" \
-    pnpm run build
+    "$PNPM_BIN" run build
 
 if [ ! -d "$REPO_DIR/frontend/web_ui/dist" ]; then
     log_err "build reported success but frontend/web_ui/dist does not exist"

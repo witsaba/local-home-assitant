@@ -46,8 +46,28 @@ set -a; . "$ENV_FILE"; set +a
 
 PG_BIN_DIR="${PG_BIN_DIR:-$HOMEBREW_PREFIX/opt/postgresql@16/bin}"
 PG_CTL="$PG_BIN_DIR/pg_ctl"
-NODE_BIN="$HOMEBREW_PREFIX/bin/node"
-PNPM_BIN="$HOMEBREW_PREFIX/bin/pnpm"
+
+# Resolve the Node toolchain. $HOMEBREW_PREFIX/bin/node is NOT the right answer:
+# Homebrew's versioned node formulae are keg-only, so brew/bin/node is whatever
+# else happens to be installed. Resolve through opt/node@22 (or whatever
+# 03-node.sh recorded) and prefer the paths witaba.env already pinned, so the
+# unit runs the same interpreter the build used.
+setup_node_env
+if [ -n "${NODE_BIN_OVERRIDE:-}" ]; then
+    NODE_BIN="$NODE_BIN_OVERRIDE"
+fi
+PNPM_BIN="$(pnpm_bin)"
+
+if [ ! -x "$PNPM_BIN" ]; then
+    log_err "pnpm not found at $PNPM_BIN. Run 03-node.sh first."
+    exit 1
+fi
+if [ ! -x "$PG_CTL" ]; then
+    log_err "pg_ctl not found at $PG_CTL. Run 01-postgresql.sh first."
+    exit 1
+fi
+log_ok "pnpm   : $PNPM_BIN ($("$PNPM_BIN" --version 2>/dev/null || echo '?'))"
+log_ok "pg_ctl : $PG_CTL"
 
 for bin in "$PG_CTL"; do
     [ -x "$bin" ] || { log_err "Required binary not executable: $bin"; exit 1; }
@@ -212,6 +232,11 @@ Environment=PORT=4173
 # V8 heap ceiling. 1GB box with ~350MB already spoken for: keep V8 honest
 # instead of letting it grow to the machine's memory limit.
 Environment=NODE_OPTIONS=--max-old-space-size=192
+# pnpm is a shim that resolves 'node' from PATH. Without this the unit can
+# silently start under whatever node happens to be in brew/bin, which is not
+# the keg-only node@22 the build used. Note the shebang inside a unit file
+# cannot interpolate \$, so this is expanded by the generating script.
+Environment=PATH=$(dirname "$NODE_BIN"):/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 ExecStart=$PNPM_BIN preview --host 0.0.0.0 --port 4173
 Restart=always
 RestartSec=5

@@ -348,6 +348,110 @@ describe_go_env() {
 }
 
 # -----------------------------------------------------------------------------
+# Node toolchain resolution
+#
+#   setup_node_env          put the right node first on PATH
+#   node_bin                absolute path to the node binary in use
+#   pnpm_bin                absolute path to pnpm
+#   node_version_ok         true when node is new enough for the locked tree
+#   preflight_node          explain precisely why node is too old
+#
+# Why this is not just "use whatever node is on PATH":
+#
+# Homebrew's versioned node formulae are KEG-ONLY. node@22 installs to
+# opt/node@22/bin and is deliberately NOT symlinked into brew/bin, so `node`
+# on PATH keeps pointing at whatever else is installed (here node@20). Any
+# script that hardcodes $HOMEBREW_PREFIX/bin/node silently gets the wrong
+# interpreter, and so does the systemd unit.
+#
+# Version floor: undici@8.11.2, pulled in by @builder.io/qwik-city@1.19.2,
+# declares engines.node ">=22.19.0" and calls webidl.util.markAsUncloneable
+# at import time. Loading vite.config.ts loads the qwik-city plugin, which
+# loads undici, so the build dies during config load with:
+#
+#   TypeError: webidl.util.markAsUncloneable is not a function
+#     at new CacheStorage (undici/lib/web/cache/cachestorage.js:20:17)
+#   failed to load config from .../vite.config.ts
+#
+# Note that markAsUncloneable is NOT node:util. It comes from the
+# webidl-conversions layer inside undici, so probing require('util') tells you
+# nothing. require('undici') is the decisive test.
+# -----------------------------------------------------------------------------
+WITSABA_NODE_FORMULA="${WITSABA_NODE_FORMULA:-node@22}"
+WITSABA_NODE_MIN_MAJOR=22
+WITSABA_NODE_MIN_MINOR=19
+WITSABA_NODE_MIN_VERSION="22.19.0"
+
+setup_node_env() {
+    local prefix_bin
+    if command -v brew >/dev/null 2>&1; then
+        prefix_bin="$(brew --prefix 2>/dev/null)/opt/${WITSABA_NODE_FORMULA}/bin"
+    fi
+
+    if [ -n "$prefix_bin" ] && [ -x "$prefix_bin/node" ]; then
+        export PATH="$prefix_bin:$PATH"
+        NODE_BIN="$prefix_bin/node"
+        # pnpm lives next to the node it was installed against when it came
+        # from that keg, but a global npm install may have put it in brew/bin.
+        if [ -x "$prefix_bin/pnpm" ]; then
+            PNPM_BIN="$prefix_bin/pnpm"
+        else
+            PNPM_BIN="$(command -v pnpm 2>/dev/null || echo "$prefix_bin/pnpm")"
+        fi
+    else
+        NODE_BIN="$(command -v node 2>/dev/null || echo node)"
+        PNPM_BIN="$(command -v pnpm 2>/dev/null || echo pnpm)"
+    fi
+
+    export NODE_BIN PNPM_BIN
+    # pnpm must run under the same node it is meant to run under.
+    if [ -x "$PNPM_BIN" ]; then
+        PATH="$(dirname "$PNPM_BIN"):$PATH"; export PATH
+    fi
+    return 0
+}
+
+node_bin() { printf '%s' "${NODE_BIN:-$(command -v node 2>/dev/null || echo node)}"; }
+pnpm_bin() { printf '%s' "${PNPM_BIN:-$(command -v pnpm 2>/dev/null || echo pnpm)}"; }
+
+node_version_ok() {
+    local v major minor
+    v="$("${NODE_BIN:-node}" --version 2>/dev/null)" || return 1
+    v="${v#v}"
+    major="${v%%.*}"
+    minor="${v#*.}"; minor="${minor%%.*}"
+    [ "$major" -gt "$WITSABA_NODE_MIN_MAJOR" ] 2>/dev/null && return 0
+    if [ "$major" -eq "$WITSABA_NODE_MIN_MAJOR" ] 2>/dev/null; then
+        [ "$minor" -ge "$WITSABA_NODE_MIN_MINOR" ] 2>/dev/null && return 0
+    fi
+    return 1
+}
+
+preflight_node() {
+    setup_node_env
+    local v; v="$("$NODE_BIN" --version 2>/dev/null || echo unknown)"
+
+    if node_version_ok; then
+        log_ok "node $v ($NODE_BIN)"
+        return 0
+    fi
+
+    log_err "node $v is too old for this project"
+    log_err ""
+    log_err "undici@8.11.2, required by @builder.io/qwik-city@1.19.2, declares"
+    log_err "engines.node >= ${WITSABA_NODE_MIN_VERSION} and calls"
+    log_err "webidl.util.markAsUncloneable while loading. vite.config.ts pulls"
+    log_err "that chain in, so 'vite build' fails during config load."
+    log_err ""
+    log_err "Node 20 will not work. Install and select a supported version:"
+    log_err "  brew install ${WITSABA_NODE_FORMULA}"
+    log_err ""
+    log_err "Reference: frontend/web_ui/Dockerfile pins 22.13.0, which is also"
+    log_err "below that floor, so the container build has the same problem."
+    return 1
+}
+
+# -----------------------------------------------------------------------------
 # mask_secret
 #
 #   mask_secret <value>
