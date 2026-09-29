@@ -174,6 +174,141 @@ read_env_value() {
 }
 
 # -----------------------------------------------------------------------------
+# run_progress
+#
+#   run_progress <label> <heartbeat_seconds> <command> [args...]
+#
+# Runs a long command, printing a timestamped heartbeat line every N seconds
+# so a silent step is not indistinguishable from a hang. This matters most on
+# the Pi: a cold `go build` of the otel + gin + pgx tree is minutes of no
+# output, and "is this working or wedged?" is the question an operator
+# actually has at that moment.
+#
+# Returns the command's own exit status.
+# -----------------------------------------------------------------------------
+run_progress() {
+    local label="$1"; shift
+    local beat="$1"; shift
+
+    local start heartbeat rc
+    start=$(date +%s)
+
+    printf '    %s ...\n' "$label"
+
+    # Subshell so the loop is its own process group and can be killed cleanly.
+    (
+        while :; do
+            sleep "$beat"
+            printf '    [%s] %s -- still running (%ds elapsed)\n' \
+                "$(date +%H:%M:%S)" "$label" "$(( $(date +%s) - start ))"
+        done
+    ) &
+    heartbeat=$!
+
+    set +e
+    "$@"
+    rc=$?
+    set -e
+
+    kill "$heartbeat" 2>/dev/null || true
+    wait "$heartbeat" 2>/dev/null || true
+
+    local elapsed=$(( $(date +%s) - start ))
+    if [ "$rc" -eq 0 ]; then
+        printf '    [%s] %s -- done in %dm%02ds\n' \
+            "$(date +%H:%M:%S)" "$label" $(( elapsed / 60 )) $(( elapsed % 60 ))
+    else
+        printf '    [%s] %s -- FAILED after %dm%02ds (exit %d)\n' \
+            "$(date +%H:%M:%S)" "$label" $(( elapsed / 60 )) $(( elapsed % 60 )) "$rc"
+    fi
+
+    return "$rc"
+}
+
+# -----------------------------------------------------------------------------
+# detect_build_parallelism
+#
+#   detect_build_parallelism
+#
+# How many concurrent compiler processes to allow.
+#
+# `go build` runs one `compile` process per -p slot and the Go compiler is the
+# single most memory-hungry thing in this install. On a 1GB Pi the default of
+# GOMAXPROCS (all cores) is how you get OOM-killed halfway through a build,
+# which costs far more time than the slower serial build would have.
+#
+# ~300MB of headroom per slot is a deliberately conservative rule of thumb for
+# the otel/gin/pgx/zap dependency tree. Never exceeds the core count.
+#
+# Override with WITSABA_BUILD_PARALLELISM: drop it to 1 if a build still dies
+# to the OOM killer, raise it if there is swap headroom to spare.
+# -----------------------------------------------------------------------------
+detect_build_parallelism() {
+    if [ -n "${WITSABA_BUILD_PARALLELISM:-}" ]; then
+        printf '%s' "$WITSABA_BUILD_PARALLELISM"
+        return
+    fi
+
+    local cpus slots mem_mb
+
+    # nproc is coreutils and absent on macOS; getconf is POSIX; sysctl is the
+    # BSD fallback. The test suite runs on a Mac, and a silent "1" there would
+    # hide a broken heuristic.
+    cpus=$(nproc 2>/dev/null \
+        || getconf _NPROCESSORS_ONLN 2>/dev/null \
+        || sysctl -n hw.ncpu 2>/dev/null \
+        || echo 1)
+    [ -z "$cpus" ] && cpus=1
+
+    mem_mb=$(LC_ALL=C awk '/^Mem:/ {print $7}' /proc/meminfo 2>/dev/null | tr -d ' ')
+
+    if [ -n "$mem_mb" ] && [ "$mem_mb" -gt 0 ] 2>/dev/null; then
+        slots=$(( mem_mb / 300 ))
+    else
+        # Memory unknown (non-Linux host). Assume 4 cores and stay conservative
+        # rather than trusting the core count, which would happily ask a
+        # 1GB-class machine for more compile slots than it can hold.
+        slots=$(( cpus / 2 ))
+    fi
+
+    [ "$slots" -lt 1 ] && slots=1
+    [ "$slots" -gt "$cpus" ] && slots="$cpus"
+
+    printf '%s' "$slots"
+}
+
+# -----------------------------------------------------------------------------
+# describe_go_env
+#
+# Prints where Go keeps its caches and whether the build cache is warm. A cold
+# cache is the difference between a 20 minute build and a 20 second one, and
+# it is invisible until you are already waiting.
+# -----------------------------------------------------------------------------
+describe_go_env() {
+    local cache_size="0"
+    local cache_dir
+    cache_dir=$(go env GOCACHE 2>/dev/null || echo "")
+
+    if [ -n "$cache_dir" ] && [ -d "$cache_dir" ]; then
+        cache_size=$(du -sh "$cache_dir" 2>/dev/null | cut -f1)
+    fi
+
+    local cpus
+    cpus=$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo '?')
+
+    printf '    %-12s %s\n' "GOCACHE"    "${cache_dir:-unknown} (${cache_size})"
+    printf '    %-12s %s\n' "GOMODCACHE" "$(go env GOMODCACHE 2>/dev/null || echo unknown)"
+    printf '    %-12s %s\n' "GOARCH"     "$(go env GOARCH 2>/dev/null || echo unknown)"
+    printf '    %-12s %s\n' "GOMAXPROCS" "${cpus} cores available"
+    printf '    %-12s %s\n' "-p"         "$(detect_build_parallelism) compile slots"
+
+    case "$cache_size" in
+        0|""|unknown) log_warn "build cache is empty: the next build is a cold build" ;;
+        *)             log_info "build cache is warm (${cache_size}); rebuilds will be fast" ;;
+    esac
+}
+
+# -----------------------------------------------------------------------------
 # mask_secret
 #
 #   mask_secret <value>

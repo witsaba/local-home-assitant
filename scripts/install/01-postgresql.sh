@@ -306,7 +306,7 @@ if [ -z "$WORKER_PW" ] || [ -z "$MESSAGING_PW" ]; then
 fi
 
 if [ "$PASSWORDS_CHANGED" = true ]; then
-    log_ok "Generated $(($SECRET_BYTES * 2)) chars ($((SECRET_BYTES * 4)) bits) per role"
+    log_ok "Generated $((SECRET_BYTES * 2)) chars ($((SECRET_BYTES * 8)) bits) per role"
     log_info "  PG_WORKER_PASSWORD          $(mask_secret "$WORKER_PW")"
     log_info "  MESSAGING_CORE_PG_PASSWORD  $(mask_secret "$MESSAGING_PW")"
 else
