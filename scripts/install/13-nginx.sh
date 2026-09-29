@@ -182,20 +182,24 @@ cat << CONF_MID
         }
 
         # --- camera viewer page -> static file --------------------------------
-        # `/stream` is the viewer page and `/stream/<mac>` is the WebSocket.
+        # NO BACKTICKS in this block. This heredoc is unquoted, so backticks
+        # in these comments are executed as command substitution and the text
+        # silently vanishes from the generated config. Use plain paths here.
+        #
+        # /stream is the viewer page and /stream/<mac> is the WebSocket.
         # Without this block the page is UNREACHABLE. nginx issues a
         # trailing-slash redirect for any URI that is the stem of a prefix
-        # location, and it does so BEFORE try_files runs, so `/stream` is
-        # 301'd to `/stream/` -- which lands in the proxy block below and 404s
-        # at the gateway. `stream.html` is on disk and serving 200 at
-        # `/stream.html` the whole time; it is simply never consulted.
+        # location, and it does so BEFORE try_files runs, so /stream is
+        # 301'd to /stream/ -- which lands in the proxy block below and 404s
+        # at the gateway. stream.html is on disk and serving 200 at
+        # /stream.html the whole time; it is simply never consulted.
         # Observed on the Pi: /api and /assets 301 to their slash forms for
         # exactly the same reason, while /devices (no matching prefix
         # location) serves 200 through try_files.
         #
-        # An exact `=` match wins over a prefix match, so this takes
-        # precedence over `location /stream/` and nothing about the socket
-        # path changes.
+        # An exact '=' match wins over a prefix match, so this takes
+        # precedence over the /stream/ proxy block and nothing about the
+        # socket path changes.
         location = /stream {
             try_files /stream.html =404;
         }
