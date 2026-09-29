@@ -213,6 +213,102 @@ else
     bad "gen_secret failed in the normal case"
 fi
 
+# -----------------------------------------------------------------------------
+# 11. available_mem_mb
+#
+# The bug this guards against: /proc/meminfo has lines named MemTotal,
+# MemFree and MemAvailable, and NO line called "Mem:". A pattern of /^Mem:/
+# against /proc/meminfo matches nothing and never errors, so the
+# memory-aware parallelism silently fell through to its fallback forever and
+# looked like it was working. Assert on the exact key so it cannot rot again.
+# -----------------------------------------------------------------------------
+info "available_mem_mb"
+mem=$(available_mem_mb || true)
+if [ ! -r /proc/meminfo ] && ! command -v free >/dev/null 2>&1; then
+    # macOS: no procfs and no free(1). available_mem_mb is documented to return
+    # nothing rather than guess, so returning nothing here is correct.
+    info "skipped (no /proc/meminfo and no free command on this host)"
+elif [ -n "$mem" ] && [ "$mem" -gt 0 ] 2>/dev/null; then
+    ok "available_mem_mb returned ${mem} MB"
+else
+    bad "available_mem_mb returned nothing on a host that can report it"
+fi
+
+if [ -r /proc/meminfo ]; then
+    from_avail=$(LC_ALL=C awk '/^MemAvailable:/ {print int($2/1024); exit}' /proc/meminfo)
+    if [ "$mem" = "$from_avail" ]; then
+        ok "value matches MemAvailable from /proc/meminfo (${from_avail} MB)"
+    else
+        bad "reported ${mem} MB but MemAvailable says ${from_avail} MB"
+    fi
+
+    # /proc/meminfo must still have no 'Mem:' line. If a future kernel adds
+    # one, this flips and gets investigated deliberately.
+    matches=$(LC_ALL=C grep -c '^Mem:' /proc/meminfo 2>/dev/null || echo 0)
+    if [ "$matches" = "0" ]; then
+        ok "/proc/meminfo has no 'Mem:' line, confirming the trap is avoided"
+    else
+        bad "/proc/meminfo now has ${matches} 'Mem:' lines -- re-check available_mem_mb"
+    fi
+fi
+
+# -----------------------------------------------------------------------------
+# 12. detect_build_parallelism: never 0, never above the core count, and it
+#     must actually respond to the override.
+# -----------------------------------------------------------------------------
+info "detect_build_parallelism"
+slots=$(detect_build_parallelism)
+cpus=$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)
+if [ "$slots" -ge 1 ] 2>/dev/null; then
+    ok "default slots = ${slots} (at least 1)"
+else
+    bad "default slots = '${slots}', must be >= 1"
+fi
+if [ "$slots" -le "$cpus" ] 2>/dev/null; then
+    ok "slots ${slots} does not exceed ${cpus} cores"
+else
+    bad "slots ${slots} exceeds ${cpus} cores"
+fi
+if [ "$(WITSABA_BUILD_PARALLELISM=1 detect_build_parallelism)" = "1" ]; then
+    ok "WITSABA_BUILD_PARALLELISM=1 is honoured"
+else
+    bad "WITSABA_BUILD_PARALLELISM override ignored"
+fi
+
+# -----------------------------------------------------------------------------
+# 13. run_progress: heartbeat fires, exit status propagates, no orphan loops
+# -----------------------------------------------------------------------------
+info "run_progress"
+out=$(run_progress "probe" 1 sh -c 'sleep 3' 2>&1)
+if printf '%s' "$out" | grep -q 'still running'; then
+    ok "heartbeat fires while the command runs"
+else
+    bad "no heartbeat line in output: $out"
+fi
+if printf '%s' "$out" | grep -q 'done in'; then
+    ok "completion line reports elapsed time"
+else
+    bad "no completion line in output: $out"
+fi
+
+set +e
+run_progress "probe-fail" 1 sh -c 'exit 7' >/dev/null 2>&1
+rc=$?
+set -e
+if [ "$rc" -eq 7 ]; then
+    ok "propagates the command's exit status (7)"
+else
+    bad "exit status was ${rc}, expected 7"
+fi
+
+sleep 2
+if pgrep -f 'still running' >/dev/null 2>&1; then
+    bad "a heartbeat loop survived the command"
+    pkill -f 'still running' 2>/dev/null || true
+else
+    ok "no orphaned heartbeat loops"
+fi
+
 echo ""
 echo "=============================================="
 printf '  %d passed, %d failed\n' "$pass" "$fail"

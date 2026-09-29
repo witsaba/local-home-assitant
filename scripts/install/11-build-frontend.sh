@@ -69,7 +69,7 @@ cd "$REPO_DIR/frontend/web_ui" || { log_err "no such directory: frontend/web_ui"
 log_info "node        : $(node --version)"
 log_info "pnpm        : $(pnpm --version)"
 log_info "NODE_OPTIONS: $NODE_OPTIONS"
-log_info "available   : $(LC_ALL=C awk '/^Mem:/ {printf "%d MB", $7}' /proc/meminfo) RAM"
+log_info "available   : $(available_mem_mb || echo '?') MB RAM"
 echo ""
 
 # -----------------------------------------------------------------------------

@@ -205,10 +205,13 @@ run_progress() {
     ) &
     heartbeat=$!
 
-    set +e
-    "$@"
-    rc=$?
-    set -e
+    # Capture the status without touching shell options. An earlier version
+    # wrapped the call in `set +e` / `set -e`; because a function body shares
+    # the caller's shell, that re-enabled errexit on return and aborted any
+    # caller that was deliberately running with it off. `|| rc=$?` is scoped to
+    # the single command and leaves errexit exactly as it found it.
+    rc=0
+    "$@" || rc=$?
 
     kill "$heartbeat" 2>/dev/null || true
     wait "$heartbeat" 2>/dev/null || true
@@ -223,6 +226,40 @@ run_progress() {
     fi
 
     return "$rc"
+}
+
+# -----------------------------------------------------------------------------
+# available_mem_mb
+#
+#   available_mem_mb
+#
+# Prints available RAM in MB, or nothing if it cannot be determined.
+#
+# Reads MemAvailable from /proc/meminfo. Note the exact key: /proc/meminfo has
+# MemTotal / MemFree / MemAvailable and NO line called "Mem:" -- that row
+# exists in the output of the `free` command, not in /proc/meminfo. Matching
+# /^Mem:/ against /proc/meminfo silently returns nothing, which is how the
+# memory-aware parallelism below once looked like it was working while in fact
+# always taking the fallback branch.
+# -----------------------------------------------------------------------------
+available_mem_mb() {
+    local kb
+    kb=$(LC_ALL=C awk '/^MemAvailable:/ {print $2; exit}' /proc/meminfo 2>/dev/null | tr -d ' ')
+
+    if [ -n "$kb" ] && [ "$kb" -gt 0 ] 2>/dev/null; then
+        printf '%s' "$(( kb / 1024 ))"
+        return 0
+    fi
+
+    # Fallback for hosts without procfs. The `free` row really is called Mem,
+    # and column 7 is "available".
+    kb=$(LC_ALL=C free -m 2>/dev/null | LC_ALL=C awk '/^Mem:/ {print $7; exit}')
+    if [ -n "$kb" ] && [ "$kb" -gt 0 ] 2>/dev/null; then
+        printf '%s' "$kb"
+        return 0
+    fi
+
+    return 1
 }
 
 # -----------------------------------------------------------------------------
@@ -260,14 +297,15 @@ detect_build_parallelism() {
         || echo 1)
     [ -z "$cpus" ] && cpus=1
 
-    mem_mb=$(LC_ALL=C awk '/^Mem:/ {print $7}' /proc/meminfo 2>/dev/null | tr -d ' ')
+    mem_mb=$(available_mem_mb || true)
 
     if [ -n "$mem_mb" ] && [ "$mem_mb" -gt 0 ] 2>/dev/null; then
         slots=$(( mem_mb / 300 ))
     else
-        # Memory unknown (non-Linux host). Assume 4 cores and stay conservative
-        # rather than trusting the core count, which would happily ask a
-        # 1GB-class machine for more compile slots than it can hold.
+        # Memory unknown (non-Linux host). Assume a modest machine and stay
+        # conservative rather than trusting the core count, which would
+        # happily ask a 1GB-class machine for more compile slots than it can
+        # hold.
         slots=$(( cpus / 2 ))
     fi
 
@@ -300,6 +338,7 @@ describe_go_env() {
     printf '    %-12s %s\n' "GOMODCACHE" "$(go env GOMODCACHE 2>/dev/null || echo unknown)"
     printf '    %-12s %s\n' "GOARCH"     "$(go env GOARCH 2>/dev/null || echo unknown)"
     printf '    %-12s %s\n' "GOMAXPROCS" "${cpus} cores available"
+    printf '    %-12s %s\n' "available" "$(available_mem_mb || echo unknown) MB"
     printf '    %-12s %s\n' "-p"         "$(detect_build_parallelism) compile slots"
 
     case "$cache_size" in
