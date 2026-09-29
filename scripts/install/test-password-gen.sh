@@ -289,7 +289,7 @@ info "run_progress"
 # target while the five services were up. A test that fails intermittently is
 # worse than no test, so give the scheduler room and then retry once.
 heartbeat_seen=0
-for attempt in 1 2 3; do
+for _attempt in 1 2 3; do
     out=$(run_progress "probe" 1 sh -c 'sleep 6' 2>&1)
     if printf '%s' "$out" | grep -q 'still running'; then
         heartbeat_seen=1
