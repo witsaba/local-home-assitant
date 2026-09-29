@@ -51,6 +51,9 @@ echo ""
 # How often to print a heartbeat while something slow runs.
 HEARTBEAT="${WITSABA_HEARTBEAT_SECS:-20}"
 
+FRONTEND_DIR="$REPO_DIR/frontend/web_ui"
+cd "$FRONTEND_DIR" || { log_err "no such directory: $FRONTEND_DIR"; exit 1; }
+
 # -----------------------------------------------------------------------------
 # Node preflight
 #
@@ -73,6 +76,7 @@ log_info "node        : $("$NODE_BIN" --version)  ($NODE_BIN)"
 log_info "pnpm        : $("$PNPM_BIN" --version 2>/dev/null || echo '?')  ($PNPM_BIN)"
 log_info "NODE_OPTIONS: $NODE_OPTIONS"
 log_info "available   : $(available_mem_mb || echo '?') MB RAM"
+log_info "workdir     : $FRONTEND_DIR"
 echo ""
 
 # -----------------------------------------------------------------------------
@@ -91,7 +95,6 @@ run_progress "pnpm install" "$HEARTBEAT" \
 # This catches any future drift where the Node floor moves again, and it
 # cannot be fooled by a stale version string.
 # -----------------------------------------------------------------------------
-cd "$REPO_DIR/frontend/web_ui" || { log_err "no such directory: frontend/web_ui"; exit 1; }
 if ! "$NODE_BIN" -e 'require("undici")' >/dev/null 2>&1; then
     log_err "this dependency tree cannot be loaded by $("$NODE_BIN" --version)"
     log_err ""
