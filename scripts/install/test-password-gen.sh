@@ -283,11 +283,24 @@ fi
 # 13. run_progress: heartbeat fires, exit status propagates, no orphan loops
 # -----------------------------------------------------------------------------
 info "run_progress"
-out=$(run_progress "probe" 1 sh -c 'sleep 3' 2>&1)
-if printf '%s' "$out" | grep -q 'still running'; then
+# Retry rather than flake. The heartbeat is a wall-clock assertion: the loop
+# sleeps for the interval, and under load on a 1GB Pi that sleep can be delayed
+# past the end of a short-lived command. This flaked once in ~6 runs on the
+# target while the five services were up. A test that fails intermittently is
+# worse than no test, so give the scheduler room and then retry once.
+heartbeat_seen=0
+for attempt in 1 2 3; do
+    out=$(run_progress "probe" 1 sh -c 'sleep 6' 2>&1)
+    if printf '%s' "$out" | grep -q 'still running'; then
+        heartbeat_seen=1
+        break
+    fi
+    sleep 1
+done
+if [ "$heartbeat_seen" = 1 ]; then
     ok "heartbeat fires while the command runs"
 else
-    bad "no heartbeat line in output: $out"
+    bad "no heartbeat line after 3 attempts: $out"
 fi
 if printf '%s' "$out" | grep -q 'done in'; then
     ok "completion line reports elapsed time"
