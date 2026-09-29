@@ -10,19 +10,16 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INSTALL_DIR="$(dirname "$SCRIPT_DIR")"
-PI_SERVER="${PI_SERVER:-192.168.1.115}"
 
-# Colors
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m'
+# Source shared brew helpers
+source "$SCRIPT_DIR/_brew-helpers.sh"
 
-log_info() { echo -e "${BLUE}[i]${NC} $1"; }
-log_ok() { echo -e "${GREEN}[✓]${NC} $1"; }
-log_warn() { echo -e "${YELLOW}[!]${NC} $1"; }
-log_err() { echo -e "${RED}[✗]${NC} $1" >&2; }
+# Setup brew PATH
+if ! setup_brew_path; then
+    log_err "Homebrew is not installed!"
+    log_err "Run 00-brew.sh first."
+    exit 1
+fi
 
 echo ""
 echo "=============================================="
@@ -30,15 +27,30 @@ echo "  Step 1: PostgreSQL Installation"
 echo "=============================================="
 echo ""
 
-# Check brew
+# Setup brew PATH (handles zsh -> bash -> brew chain)
 if ! command -v brew &> /dev/null; then
+    # Try common Homebrew locations
+    BREW_PATHS=(
+        "/home/linuxbrew/.linuxbrew/bin/brew"
+        "$HOME/.linuxbrew/bin/brew"
+        "$HOME/.brew/bin/brew"
+    )
+    for brew_path in "${BREW_PATHS[@]}"; do
+        if [ -f "$brew_path" ]; then
+            export PATH="$(dirname "$brew_path"):$PATH"
+            break
+        fi
+    done
+fi
+
+# Source brew environment
+if command -v brew &> /dev/null; then
+    eval "$(brew --env 2>/dev/null)" 2>/dev/null || true
+else
     log_err "Homebrew is not installed!"
     log_err "Run 00-brew.sh first."
     exit 1
 fi
-
-# Source brew environment
-eval "$(brew --env)"
 
 # Install PostgreSQL 16
 log_info "Installing PostgreSQL 16 via Homebrew..."

@@ -33,14 +33,21 @@ echo ""
 if command -v brew &> /dev/null; then
     log_ok "Homebrew is already installed: $(brew --version | head -1)"
     
-    # Ensure brew is in PATH for this session
-    if ! grep -q 'eval "$(brew --env)"' ~/.bashrc 2>/dev/null; then
+    # Set PATH for current session (important for running scripts in sequence)
+    export HOMEBREW_PREFIX="/home/linuxbrew/.linuxbrew"
+    export PATH="/home/linuxbrew/.linuxbrew/bin:$PATH"
+    eval "$(brew --env 2>/dev/null)" 2>/dev/null || true
+    
+    # Ensure brew is in PATH for future sessions
+    if ! grep -q 'HOMEBREW_PREFIX' ~/.bashrc 2>/dev/null; then
         log_info "Adding Homebrew to ~/.bashrc..."
-        echo '' >> ~/.bashrc
-        echo '# Homebrew' >> ~/.bashrc
-        echo 'eval "$(/home/linuxbrew/.linuxbrew/bin/brew --env)"' >> ~/.bashrc
-        echo 'export HOMEBREW_PREFIX="/home/linuxbrew/.linuxbrew"' >> ~/.bashrc
-        echo 'export PATH="/home/linuxbrew/.linuxbrew/bin:$PATH"' >> ~/.bashrc
+        cat >> ~/.bashrc << 'BASHRC_EOF'
+
+# Homebrew
+export HOMEBREW_PREFIX="/home/linuxbrew/.linuxbrew"
+export PATH="/home/linuxbrew/.linuxbrew/bin:$PATH"
+eval "$(/home/linuxbrew/.linuxbrew/bin/brew --env 2>/dev/null)" 2>/dev/null || true
+BASHRC_EOF
     fi
     
     # Update Homebrew

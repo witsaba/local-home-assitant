@@ -11,17 +11,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 INSTALL_DIR="$HOME/.witsaba"
 
-# Colors
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-BLUE='\033[0;34m'
-YELLOW='\033[1;33m'
-NC='\033[0m'
-
-log_info() { echo -e "${BLUE}[i]${NC} $1"; }
-log_ok() { echo -e "${GREEN}[✓]${NC} $1"; }
-log_warn() { echo -e "${YELLOW}[!]${NC} $1"; }
-log_err() { echo -e "${RED}[✗]${NC} $1" >&2; }
+# Source shared brew helpers
+source "$SCRIPT_DIR/_brew-helpers.sh"
 
 echo ""
 echo "=============================================="

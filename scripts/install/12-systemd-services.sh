@@ -10,6 +10,12 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INSTALL_DIR="$HOME/.witsaba"
 
+# Source shared brew helpers
+source "$SCRIPT_DIR/_brew-helpers.sh"
+
+# Setup brew PATH
+setup_brew_path
+
 # Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -50,12 +56,25 @@ fi
 PG_PASSWORD="${PG_PASSWORD:-changeme-worker}"
 PG_MESSAGING_PASSWORD="${PG_MESSAGING_PASSWORD:-changeme-messaging}"
 
+# Detect brew paths dynamically
+BREW_PREFIX="${HOMEBREW_PREFIX:-/home/linuxbrew/.linuxbrew}"
+BREW_BIN="${BREW_PREFIX}/bin"
+PG_CTL="${BREW_BIN}/pg_ctl"
+PNPM="${BREW_BIN}/pnpm"
+
+# Fallback to which if not found
+[ ! -f "$PG_CTL" ] && PG_CTL=$(which pg_ctl 2>/dev/null || echo "pg_ctl")
+[ ! -f "$PNPM" ] && PNPM=$(which pnpm 2>/dev/null || echo "pnpm")
+
+log_info "Using PostgreSQL: $PG_CTL"
+log_info "Using pnpm: $PNPM"
+
 # Create systemd user directory
 SYSTEMD_DIR="$HOME/.config/systemd/user"
 mkdir -p "$SYSTEMD_DIR"
 
-# Create postgres startup service (if using homebrew postgres)
-cat > "$SYSTEMD_DIR/witsaba-postgres.service" << 'SERVICE_EOF'
+# Create postgres startup service
+cat > "$SYSTEMD_DIR/witsaba-postgres.service" << SERVICE_EOF
 [Unit]
 Description=Witsaba PostgreSQL (Homebrew)
 After=network.target
@@ -63,8 +82,8 @@ After=network.target
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/home/linuxbrew/.linuxbrew/bin/pg_ctl -D /home/liwaisi/.witsaba/postgres/data -l /home/liwaisi/.witsaba/postgres/logs/postgresql.log start
-ExecStop=/home/linuxbrew/.linuxbrew/bin/pg_ctl -D /home/liwaisi/.witsaba/postgres/data stop -m fast
+ExecStart=${PG_CTL} -D ${HOME}/.witsaba/postgres/data -l ${HOME}/.witsaba/postgres/logs/postgresql.log start
+ExecStop=${PG_CTL} -D ${HOME}/.witsaba/postgres/data stop -m fast
 Restart=on-failure
 
 [Install]
@@ -136,7 +155,7 @@ After=network.target
 Type=simple
 WorkingDirectory=${HOME}/.witsaba/frontend
 ExecStartPre=/bin/sleep 3
-ExecStart=/home/linuxbrew/.linuxbrew/bin/pnpm preview --host 0.0.0.0 --port 4173
+ExecStart=${PNPM} preview --host 0.0.0.0 --port 4173
 Environment="NODE_ENV=production"
 Environment="NODE_OPTIONS=--max-old-space-size=256"
 Environment="HOST=0.0.0.0"
@@ -165,10 +184,10 @@ echo ""
 log_ok "Systemd user services created!"
 echo ""
 echo "Services created:"
-echo "  witsaba-postgres.service    - PostgreSQL database"
-echo "  witsaba-messaging-core.service - NATS + WebSocket gateway"
-echo "  witsaba-workers.service     - Device discovery"
-echo "  witsaba-web-ui.service      - Web UI (port 4173)"
+echo "  witsaba-postgres.service         - PostgreSQL database"
+echo "  witsaba-messaging-core.service   - NATS + WebSocket gateway"
+echo "  witsaba-workers.service          - Device discovery"
+echo "  witsaba-web-ui.service           - Web UI (port 4173)"
 echo ""
 echo "Service commands:"
 echo "  systemctl --user start witsaba-postgres"
