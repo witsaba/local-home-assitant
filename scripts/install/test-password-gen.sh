@@ -244,7 +244,10 @@ if [ -r /proc/meminfo ]; then
 
     # /proc/meminfo must still have no 'Mem:' line. If a future kernel adds
     # one, this flips and gets investigated deliberately.
-    matches=$(LC_ALL=C grep -c '^Mem:' /proc/meminfo 2>/dev/null || echo 0)
+    # awk, not 'grep -c ... || echo 0': grep -c prints the count AND exits
+    # non-zero when the count is 0, so the || branch fires too and the variable
+    # ends up holding "0\n0" instead of "0".
+    matches=$(LC_ALL=C awk '/^Mem:/ {n++} END {print n+0}' /proc/meminfo)
     if [ "$matches" = "0" ]; then
         ok "/proc/meminfo has no 'Mem:' line, confirming the trap is avoided"
     else
