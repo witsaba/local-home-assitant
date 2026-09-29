@@ -44,10 +44,8 @@ set -a; . "$ENV_FILE"; set +a
 PG_BIN_DIR="${PG_BIN_DIR:-$HOMEBREW_PREFIX/opt/postgresql@16/bin}"
 PG_CTL="$PG_BIN_DIR/pg_ctl"
 
-# nginx serves the static frontend and proxies /api and /stream. It needs no
-# node runtime at all, which is the point: the previous unit ran
-# `pnpm preview` under a node@22 keg, which cost 143MB of RAM to serve a page
-# that is 40KB on disk.
+# nginx serves the static frontend and proxies /api and /stream. No node
+# runtime is involved anywhere in this path.
 NGINX_BIN="$HOMEBREW_PREFIX/bin/nginx"
 NGINX_PREFIX="$INSTALL_DIR/nginx"
 NGINX_CONF="$NGINX_PREFIX/nginx.conf"
@@ -218,8 +216,7 @@ EOF
 #
 # Serves the static frontend and reverse-proxies /api and /stream to
 # messaging-core, so the browser makes one same-origin request and nothing
-# needs CORS. Replaces the `vite preview` unit: same URL, 143MB -> single-digit
-# megabytes, and no node runtime in the serving path at all.
+# needs CORS.
 # -----------------------------------------------------------------------------
 cat > "$SYSTEMD_DIR/witsaba-nginx.service" << EOF
 [Unit]

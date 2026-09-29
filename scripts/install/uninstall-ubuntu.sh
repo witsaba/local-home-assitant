@@ -38,7 +38,6 @@ fi
 # Confirmation
 echo "This will remove:"
 echo "  - Witsaba binaries:     $INSTALL_DIR/bin/"
-echo "  - Witsaba frontend:    $INSTALL_DIR/frontend/"
 echo "  - PostgreSQL data:      $INSTALL_DIR/postgres/"
 echo "  - Systemd services:     witsaba-*.service"
 echo "  - nginx config + tree:  ~/.witsaba/nginx/"
@@ -46,7 +45,7 @@ echo "  - Witsaba source:      ~/repositories/witsaba"
 echo ""
 echo "This will NOT remove:"
 echo "  - Homebrew (can be kept for other packages)"
-echo "  - Go / Node.js (installed via Homebrew)"
+echo "  - Go (installed via Homebrew)"
 echo ""
 
 read -p "Are you sure you want to uninstall? (y/n): " -n 1 -r
@@ -69,6 +68,9 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 SYSTEMD_DIR="$HOME/.config/systemd/user"
 
 if [ -d "$SYSTEMD_DIR" ]; then
+    # witsaba-web-ui is not created by the current installer: nginx replaced
+    # it in e75af53. It is still stopped here so that uninstalling over an
+    # install that predates the nginx migration leaves nothing running.
     for service in witsaba-postgres witsaba-postgres-ready witsaba-messaging-core witsaba-workers witsaba-nginx witsaba-web-ui; do
         if systemctl --user list-unit-files | grep -q "$service"; then
             log_info "Stopping $service..."

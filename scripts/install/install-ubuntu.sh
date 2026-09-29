@@ -49,7 +49,6 @@ STEPS=(
     "00-brew.sh:Homebrew (package manager)"
     "01-postgresql.sh:PostgreSQL 16"
     "02-go.sh:Go compiler"
-    "03-node.sh:Node.js + pnpm"
     "04-postgres-init.sh:Database initialization"
 )
 
@@ -58,19 +57,6 @@ BUILD_STEPS=(
     "13-nginx.sh:Serve the static UI with nginx"
     "12-systemd-services.sh:Create systemd services"
 )
-
-# The Qwik/Vite build is not part of the default path any more. It still works
-# and is still useful for framework work on a workstation, but on the Pi it
-# produced 143MB of runtime for a page that is 40KB on disk, and it is not
-# what nginx serves. Opt in with WITSABA_WITH_QWIK=1.
-if [ "${WITSABA_WITH_QWIK:-0}" = "1" ]; then
-    BUILD_STEPS=(
-        "10-build-go.sh:Build Go services"
-        "11-build-frontend.sh:Build web UI (Qwik)"
-        "13-nginx.sh:Serve the static UI with nginx"
-        "12-systemd-services.sh:Create systemd services"
-    )
-fi
 
 # Run installation steps
 for step in "${STEPS[@]}"; do
@@ -120,7 +106,7 @@ if [ "$SKIP_BUILD" = false ]; then
         log_warn "  scp ./build/messaging-core ./build/workers \\"
         log_warn "      $(id -un)@192.168.1.115:~/.witsaba/bin/"
         log_warn ""
-        log_warn "Set WITSABA_SKIP_GO_BUILD=1 to build the frontend only and come"
+        log_warn "Set WITSABA_SKIP_GO_BUILD=1 to run the remaining steps and come"
         log_warn "back to this step after the binaries are in place."
         echo ""
         SKIP_GO_BUILD=true
@@ -170,7 +156,6 @@ echo "Summary:"
 echo "  Homebrew:     Installed"
 echo "  PostgreSQL:   Configured"
 echo "  Go:           Installed"
-echo "  Node.js:      Installed"
 echo "  Database:     Initialized"
 if [ "$SKIP_BUILD" = false ]; then
     echo "  Go services:  Built"

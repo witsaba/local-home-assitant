@@ -18,7 +18,6 @@ Steps are also runnable on their own, in order:
 | `00-brew.sh` | locate or install Homebrew |
 | `01-postgresql.sh` | PostgreSQL 16 in `~/.witsaba/postgres`, 1GB-RAM profile, generated credentials |
 | `02-go.sh` | Go toolchain |
-| `03-node.sh` | Node 22 + pnpm (only needed for the optional Qwik path) |
 | `04-postgres-init.sh` | database, roles, schema, grants, privilege assertions |
 | `13-nginx.sh` | nginx, unprivileged config, deploy the static UI |
 | `12-systemd-services.sh` | the five user units |
@@ -28,7 +27,9 @@ Build and deploy:
 | Step | What it does |
 |---|---|
 | `10-build-go.sh` | build the two Go services. **Skipped automatically under ~1.4GB RAM** |
-| `11-build-frontend.sh` | build the Qwik frontend. **Opt-in**, see below |
+
+There is no front-end build step. The UI is three static files that are
+copied to disk as they are; see `frontend/web_ui/README.md`.
 
 ## Cross-compiling the Go services
 
@@ -54,26 +55,21 @@ scp ./build/messaging-core ./build/workers \
 
 `CGO_ENABLED=0` is already set, so no target toolchain or sysroot is involved.
 
-## Two frontend paths
+## The frontend
 
-The Pi serves a plain static frontend. The Qwik scaffold is still in the repo,
-because it is still useful for framework work on a workstation, but it is not
-what runs on the Pi.
+There is one frontend path: nginx serving static HTML from disk.
 
-| | nginx + static HTML (default on the Pi) | Qwik / Vite (opt-in) |
-|---|---|---|
-| Runtime RAM | **8 MB** | 143 MB |
-| Disk | 52 KB | 308 MB of `node_modules` |
-| Build step | none | ~1.5 min |
-| Needs Node at runtime | no | yes |
-| Feature parity | home + device list | same, plus the Qwik test suite |
+| | nginx + static HTML |
+|---|---|
+| Runtime RAM | **8 MB** |
+| Disk | 52 KB |
+| Build step | none |
+| Needs Node at runtime | no |
+| Test suite | none — see the follow-ups in `odd/tasks/remove-qwik.md` |
 
-Enable the Qwik path with `WITSABA_WITH_QWIK=1`. It does not change what nginx
-serves; it just also populates `~/.witsaba/frontend`.
-
-Both paths target the same two pages and the same endpoint. The Qwik app used
-`routeLoader$` to fetch `/api/devices/active`; the static version does one
-`fetch` from the browser instead.
+An earlier revision served these pages from `pnpm preview`, which cost 143MB
+of RAM and 308MB of `node_modules` on a host with 899MB total. That is why
+the path has no toolchain in it.
 
 ## One origin, no CORS
 

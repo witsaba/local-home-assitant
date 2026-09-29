@@ -1,73 +1,67 @@
-# witsaba-web-ui
+# web_ui
 
-Front-end for the [witsaba local-home-assistant](../..) stack.
-
-Qwik + Qwik City, scaffolded with the official `empty` starter.
-The repo is intentionally minimal: one home route, one placeholder
-component (`SkeletonCard`), and a Vitest config wired up for the
-official `@builder.io/qwik/testing` layer.
-
-## Stack
-
-- **Qwik / Qwik City** — resumable UI, server-rendered first.
-- **Vite 7** — Qwik's build pipeline.
-- **Vitest + jsdom** — unit / component tests, official Qwik testing API.
-- **pnpm** — package manager (Linux/macOS/Windows arm64 supported).
-- **Node.js 18.17+** — required at build and run time.
-
-## Scripts
-
-```sh
-pnpm install                  # install dependencies
-pnpm dev                      # vite dev server (SSR mode)
-pnpm build                    # production build (dist/ + server/)
-pnpm preview                  # build + serve the production preview
-pnpm test                     # one-shot vitest run
-pnpm test.watch               # vitest watch mode
-pnpm test.coverage            # vitest with v8 coverage
-pnpm lint                     # eslint
-pnpm fmt                      # prettier --write
-```
+The witsaba operator front-end: three static pages and one stylesheet and one
+script. No framework, no build step, no `node_modules`.
 
 ## Layout
 
 ```
-frontend/web_ui/
-├── src/
-│   ├── components/
-│   │   └── skeleton-card/    # placeholder card used on the home page
-│   ├── routes/
-│   │   └── index.tsx         # the only route — home page wireframe
-│   ├── entry.dev.tsx         # dev-mode entry
-│   ├── entry.preview.tsx     # `vite preview` entry
-│   ├── entry.ssr.tsx         # SSR entry (used by build + adapter)
-│   ├── root.tsx              # <html>/<head>/<body> shell
-│   └── global.css            # base reset + design tokens (placeholder)
-├── public/                   # static assets served as-is
-├── vite.config.ts            # Vite + Qwik plugins
-├── vitest.config.ts          # separate Vitest config (per Qwik docs)
-└── package.json
+static/
+  index.html      home: system status, feature cards
+  devices.html    active device list, polls the API
+  stream.html     live camera viewer for one device
+  favicon.svg
+  assets/app.css  design tokens and components
+  assets/app.js   fetch/polling/relative-time helpers, witsaba.* namespace
 ```
 
-## Docker
+## How it is served
 
-This service is wired into the **root** `docker-compose.yml` as
-`web_ui`. The container:
+`scripts/install/13-nginx.sh` copies `static/` into `~/.witsaba/nginx/html` and
+then asserts that `index.html`, `devices.html`, `assets/app.css` and
+`assets/app.js` are present. That assert list is the deployment contract: if
+one of them is missing the script fails rather than starting nginx on a partial
+tree. `scripts/install/12-systemd-services.sh` supervises nginx as
+`witsaba-nginx.service` in user space.
 
-- listens on the host network on port `5173` (dev) / `4173` (preview),
-- `depends_on: postgres: condition: service_healthy` — the UI never
-  starts before Postgres is accepting connections.
+To redeploy after editing a page, re-run `13-nginx.sh`. It replaces the contents
+of the document root rather than the directory itself, because nginx may still
+hold the old tree open and the running config references that path.
 
-See the [top-level `docker-compose.yml`](../../docker-compose.yml) and
-[`odd/tasks/qwik-web-ui-scaffold.md`](../../odd/tasks/qwik-web-ui-scaffold.md)
-for the full integration plan.
+## One origin, no CORS
 
-## Notes
+nginx serves the files and reverse-proxies the backend on a single port, so the
+browser never makes a cross-origin request:
 
-- This is a **skeleton**, not a finished product. The `SkeletonCard`
-  action buttons are intentionally `disabled` until a real feature
-  wires them up.
-- The design system is **not** chosen yet. Tailwind, UnoCSS, and
-  vanilla-extract are all options; that decision is a separate task.
-- Bun is **not** used as the runtime — the Qwik Bun adapter has known
-  `routeAction$` bugs. pnpm + Node is the supported path.
+| Path | Goes to | Notes |
+|---|---|---|
+| `/` and other pages | files in `~/.witsaba/nginx/html` | served from disk |
+| `/api/*` | `127.0.0.1:8081` | `messaging-core` REST |
+| `/stream/*` | `127.0.0.1:8080` | `messaging-core` WebSocket gateway |
+
+The port is `WITSABA_HTTP_PORT`, default `4173`. `/stream/` carries the
+`Upgrade` and `Connection` headers a WebSocket needs, and `proxy_buffering off`
+keeps camera frames from being held back.
+
+Extensionless page routes come from `try_files $uri $uri.html $uri/ =404`.
+Because nginx
+issues a trailing-slash redirect for the *stem* of a prefix location before
+`try_files` runs, a page whose path is also a proxy prefix needs an exact
+`location =` match. `/stream` is exactly that case.
+
+## Editing rules
+
+- No `innerHTML`. Anything from the LAN — a device name, a MAC — is written
+  with `textContent`.
+- Blob URLs painted from the stream must be revoked before the next `src` is
+  assigned, and again on close. At 10fps a naive assignment leaks 36000 live
+  blob URLs an hour.
+- Polling loops that are correct for a device table are wrong for a live
+  socket. `witsaba.stream` owns tab visibility for the viewer; the page must not
+  also own it.
+
+## Tests
+
+None. `frontend/web_ui/static/` has no committed test suite. The behaviour
+harnesses used while building the viewer live in `/tmp` and were never
+committed. See the follow-ups in `odd/tasks/remove-qwik.md`.

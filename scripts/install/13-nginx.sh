@@ -2,12 +2,12 @@
 # =============================================================================
 # 13-nginx.sh - Serve the static frontend with nginx, user space, no root
 # =============================================================================
-# Replaces the Qwik `vite preview` runtime on the Pi.
+# nginx serves the static site directly from disk. There is no frontend build
+# step and no node runtime anywhere in the serving path: the site is three HTML
+# files, one stylesheet and one script, all of them hand-editable.
 #
-# Measured on the target (4 cores, 899MB RAM): `vite preview` cost 143MB of
-# RAM and 308MB of node_modules to serve two pages whose entire behaviour is
-# one fetch to /api/devices/active. nginx serving static files costs single-digit
-# megabytes and needs no node at all.
+# History: this step replaced a `pnpm preview` unit that cost 143MB of RAM and
+# 308MB of node_modules to serve the same pages on a host with 899MB total.
 #
 # One origin. nginx serves the files and reverse-proxies:
 #     /api/*    -> 127.0.0.1:8081  (messaging-core REST)

@@ -3,7 +3,8 @@
 # test-nginx-config.sh - Verify the generated nginx config and the static site
 # =============================================================================
 # Three layers:
-#   1. static   - required files present, no leftovers from the Qwik tree
+#   1. static   - required files present, and the serving path has no
+#                 node dependency
 #   2. config   - nginx -t accepts it, and it is genuinely unprivileged
 #   3. live     - nginx serves the page and proxies /api through to
 #                 messaging-core, proving the single-origin design works
@@ -57,22 +58,28 @@ else
     done
 
     size=$(du -sh "$NGINX_HTML" | cut -f1)
-    ok "document root is $size (vite preview needed 308MB of node_modules)"
+    ok "document root is $size"
 fi
 
-# The Qwik tree must not be required. It is installed at
-# ~/.witsaba/frontend by 11-build-frontend.sh; nginx must not depend on it.
+# The serving path must have no node dependency: nginx reads the document root
+# directly, and nothing builds or resolves a package on the way there. This
+# asserts against the real generated config, so it only means something once
+# 13-nginx.sh has run here. Skipped, not passed, when it has not.
 echo ""
-log_info "independence from the Qwik tree"
-if [ -d "$INSTALL_DIR/frontend/node_modules" ]; then
-    # Temporarily hide it and confirm the config does not reference it.
-    if grep -q "$INSTALL_DIR/frontend" "$NGINX_CONF" 2>/dev/null; then
-        bad "nginx.conf references $INSTALL_DIR/frontend"
-    else
-        ok "nginx.conf does not reference the Qwik tree"
-    fi
+log_info "no node dependency in the serving path"
+if [ ! -f "$NGINX_CONF" ]; then
+    skip "nginx.conf not generated yet; run 13-nginx.sh to check this"
 else
-    ok "no Qwik tree installed; nothing to depend on"
+    if grep -qE 'node_modules|/frontend/' "$NGINX_CONF"; then
+        bad "nginx.conf references a node tree"
+    else
+        ok "nginx.conf references no node tree"
+    fi
+    if [ -d "$NGINX_HTML/node_modules" ]; then
+        bad "document root contains a node_modules directory"
+    else
+        ok "document root has no node_modules"
+    fi
 fi
 
 # -----------------------------------------------------------------------------

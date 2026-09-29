@@ -326,52 +326,6 @@ else
     ok "no orphaned heartbeat loops"
 fi
 
-# -----------------------------------------------------------------------------
-# 14. setup_node_env invariants
-#
-# The bug this guards against: setup_node_env resolved $NODE_BIN correctly to
-# opt/node@22/bin/node, then reordered PATH to put pnpm's own directory first.
-# pnpm is a standalone ELF binary with no node shebang and launches vite using
-# whichever node is first on PATH, so 'node' stayed v20.20.2 and the build
-# failed inside undici while the version preflight -- which only inspects
-# $NODE_BIN -- reported success.
-# -----------------------------------------------------------------------------
-info "setup_node_env"
-if command -v brew >/dev/null 2>&1 || [ -x "/home/linuxbrew/.linuxbrew/bin/brew" ]; then
-    export PATH="/home/linuxbrew/.linuxbrew/bin:$PATH"
-fi
-setup_node_env
-
-if [ -x "${NODE_BIN:-}" ]; then
-    ok "NODE_BIN is executable ($NODE_BIN)"
-else
-    bad "NODE_BIN is not executable: ${NODE_BIN:-unset}"
-fi
-
-if node_path_matches_node_bin; then
-    ok "command -v node agrees with NODE_BIN"
-else
-    bad "PATH node ($(command -v node 2>/dev/null || echo 'none')) != NODE_BIN (${NODE_BIN:-unset})"
-fi
-
-if [ -x "${PNPM_BIN:-}" ]; then
-    ok "PNPM_BIN is executable ($PNPM_BIN)"
-else
-    info "PNPM_BIN not present on this host (${PNPM_BIN:-unset}); skipped"
-fi
-
-# The node@22 bin directory must precede any directory that also provides a
-# node binary, or the interpreter silently reverts.
-if [ -n "${NODE_BIN:-}" ]; then
-    node_dir=$(dirname "$NODE_BIN")
-    first_node=$(command -v node 2>/dev/null || echo "")
-    if [ -n "$first_node" ] && [ "$(dirname "$first_node")" = "$node_dir" ]; then
-        ok "resolved node bin dir is ahead of every other node on PATH"
-    else
-        bad "first node on PATH is $first_node, not in $node_dir"
-    fi
-fi
-
 echo ""
 echo "=============================================="
 printf '  %d passed, %d failed\n' "$pass" "$fail"
