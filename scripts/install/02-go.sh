@@ -9,15 +9,38 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Source shared brew helpers
-source "$SCRIPT_DIR/_brew-helpers.sh"
+# =============================================================================
+# Find and set up Homebrew
+# =============================================================================
+BREW_FOUND=false
+BREW_PATHS=(
+    "/home/linuxbrew/.linuxbrew/bin/brew"
+    "$HOME/.linuxbrew/bin/brew"
+    "$HOME/.brew/bin/brew"
+)
 
-# Setup brew PATH
-if ! setup_brew_path; then
-    log_err "Homebrew is not installed!"
-    log_err "Run 00-brew.sh first."
+for brew_path in "${BREW_PATHS[@]}"; do
+    if [ -f "$brew_path" ]; then
+        export HOMEBREW_PREFIX="$(dirname "$(dirname "$brew_path")")"
+        export PATH="$(dirname "$brew_path"):$PATH"
+        BREW_FOUND=true
+        break
+    fi
+done
+
+if [ "$BREW_FOUND" != true ]; then
+    echo "[✗] Homebrew not found. Run 00-brew.sh first."
     exit 1
 fi
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+BLUE='\033[0;34m'
+NC='\033[0m'
+
+log_info() { echo -e "${BLUE}[i]${NC} $1"; }
+log_ok() { echo -e "${GREEN}[✓]${NC} $1"; }
 
 echo ""
 echo "=============================================="
@@ -25,55 +48,12 @@ echo "  Step 2: Go Installation"
 echo "=============================================="
 echo ""
 
-# Setup brew PATH (handles zsh -> bash -> brew chain)
-if ! command -v brew &> /dev/null; then
-    # Try common Homebrew locations
-    BREW_PATHS=(
-        "/home/linuxbrew/.linuxbrew/bin/brew"
-        "$HOME/.linuxbrew/bin/brew"
-        "$HOME/.brew/bin/brew"
-    )
-    for brew_path in "${BREW_PATHS[@]}"; do
-        if [ -f "$brew_path" ]; then
-            export PATH="$(dirname "$brew_path"):$PATH"
-            break
-        fi
-    done
-fi
-
-# Source brew environment
-if command -v brew &> /dev/null; then
-    eval "$(brew --env 2>/dev/null)" 2>/dev/null || true
-else
-    log_err "Homebrew is not installed!"
-    log_err "Run 00-brew.sh first."
-    exit 1
-fi
-
 # Check if Go is already installed
 if command -v go &> /dev/null; then
-    GO_VERSION=$(go version | grep -oP 'go\K[0-9]+\.[0-9]+')
     log_ok "Go is already installed: $(go version)"
-    
-    if [ "$(echo "$GO_VERSION >= 1.26" | bc)" -eq 1 ]; then
-        log_ok "Go version is sufficient (>= 1.26)"
-    else
-        log_info "Installing Go 1.26+..."
-        brew install go --quiet
-    fi
 else
-    log_info "Installing Go 1.26..."
+    log_info "Installing Go..."
     brew install go --quiet
 fi
 
-# Verify installation
-if command -v go &> /dev/null; then
-    log_ok "Go installed: $(go version)"
-    log_info "Go path: $(which go)"
-else
-    log_err "Go installation failed"
-    exit 1
-fi
-
-log_ok ""
-log_ok "Go installation complete!"
+log_ok "Go installed: $(go version)"
