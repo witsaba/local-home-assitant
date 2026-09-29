@@ -86,13 +86,13 @@ Not touched: `embedded/iot_cams/**`, `services/messaging-core/**`,
 
 ## Tasks
 
-- [ ] **T1** Stream helper layer in `app.js` + `.stream-*` styles in `app.css`.
+- [x] **T1** Stream helper layer in `app.js` + `.stream-*` styles in `app.css`.
       Socket lifecycle, blob-URL frame painter with correct revoke ordering,
-      bounded reconnect, status transitions. No page yet.
-- [ ] **T2** `stream.html` viewer page. `?mac=` resolution, device picker
+      bounded reconnect, status transitions. No page yet. → `28dc9cb`
+- [x] **T2** `stream.html` viewer page. `?mac=` resolution, device picker
       fallback, viewer surface, status chip, live frame counter, stop control,
-      single-viewer + `/capture` starvation notices.
-- [ ] **T3** Entry points in `index.html` and `devices.html`, then run the
+      single-viewer + `/capture` starvation notices. → `b9b16d8`
+- [x] **T3** Entry points in `index.html` and `devices.html`, then run the
       repository's own checks and close the feature document.
 
 ## Acceptance criteria
@@ -135,9 +135,17 @@ before opening the PR.
 
 ## Route
 
-Delegated direct. T1 and T3 each touch 2+ non-trivial files, which fires the
-multi-file write rule; T2 is a single new file but is delegated in the same
-batch for a consistent voice. Parent owns verification and every commit.
+Delegated direct for T1 and T2; inline for T3. The multi-file write rule fired
+for every task, but the delegation runtime **destroyed its worktree twice**
+(once mid-run, once after reporting success), so after T2 the remaining work
+moved inline. T3 is two small pages plus a few lines of CSS. Parent owns every
+verification and every commit.
+
+**Operational lesson for this repo:** commit each work unit immediately. T1
+survived a post-hoc worktree wipe only because it was already committed; T2's
+`stream.html` was untracked when the tree vanished and had to be recovered from
+a `/tmp` copy. The blast radius of a sandbox wipe is bounded by how recently
+you committed.
 
 ## Progress
 
@@ -184,6 +192,58 @@ The writer also left two **brief** defects, not code defects, that were my own
 fault and are now corrected in the doc: the `innerHTML` and raw-hex criteria as
 originally written were unsatisfiable against untouched baseline files.
 
+### Incident 2 — worktree wiped after the writer reported success
+
+T2's writer reported `status: completed` with 20/20 checks and a clean
+two-tree `git status`. The worktree then vanished entirely, taking the
+untracked `stream.html` with it. The branch ref survived, so the worktree was
+rebuilt with `prune --expire=now` + re-add, and the page was restored from the
+`/tmp` copy taken beforehand. This is what motivated committing each work unit
+immediately and moving T3 inline.
+
+### T2 — stream.html viewer page ✅ (`b9b16d8`)
+
+333-line page: `?mac=` → auto-connect-single → picker → empty state, with a
+status chip, frame counter, stop button, and the two standing chip notices.
+
+The writer's checker was **structural only** — ids, class names, JS style — and
+passed 20/20 while the page had a defect that would have made it unusable. Four
+real defects, all fixed:
+
+1. `witsaba.onVisible(resolveAndStream, 10000)` plus a duplicate initial
+   `resolveAndStream()` call meant `resolveAndStream` ran on a 10 s timer.
+   Since it closes the open stream before opening the next, the socket was torn
+   down and re-established every 10 seconds: the image blanks, the operator
+   reloads, and the chip connection churns. The 10 s loop that is correct for
+   `devices.html` is wrong for a live socket. Fixed — resolve runs once, and
+   the tick is guarded by `if (controller) return`. Tab visibility is already
+   owned by `witsaba.stream`, so the page must not also own it.
+2. **Pressing Stop was undone within 10 s.** `closeStream()` nulls the
+   controller, so the next tick saw "no stream" and reconnected. Fixed with an
+   explicit `userStopped` flag, cleared only by an explicit open.
+3. The picker path removed the standing single-viewer and `/capture` 503
+   notices from the DOM, losing them exactly when several operators are about
+   to contend for the same hardware.
+4. A dead no-op expression in the option loop whose comment claimed it
+   appended the node.
+
+Defects 1 and 2 were found by a **behavioural** harness, not by reading alone
+and not by the structural checker. Note also that three of the four initial
+behavioural failures were bugs in the harness itself (asserting before the
+`witsaba.api()` promise settled) — the same class of error as in T1, where
+three of five failures were the harness, not the app.
+
+### T3 — entry points ✅
+
+`index.html` gains a fifth feature card linking to `/stream` (not
+`aria-disabled`, unlike the Discovery/Logs/Settings placeholders) and a Stream
+nav link. `devices.html` gains a per-row **View** deep link to
+`/stream?mac=<mac>` plus its table header, and the nav link. The MAC is passed
+through `encodeURIComponent` into the query string and read back with
+`URLSearchParams`, so a device name from the LAN never becomes markup.
+`app.css` gains `.device-table__action` / `.device-table__view` using only
+existing tokens. Done inline, not delegated — see Route.
+
 ## Verification evidence
 
 ### T1 (observed on the dev machine, Node v26.10.0)
@@ -199,12 +259,47 @@ originally written were unsatisfiable against untouched baseline files.
 - Added-line scans: 0 new `innerHTML`; 0 raw hex or bare spacing; all 9
   `.stream-*` classes present; `prefers-reduced-motion` respected.
 
-### Still pending (cannot be checked off this machine)
+### T2 (observed on the dev machine, Node v26.10.0)
 
-- `GET /stream` serving `stream.html` through nginx `try_files` — nginx is not
-  installed on this machine, so the URL-space claim is reasoned from the config,
-  not executed. **Verify on the Pi.**
+- Structural checker (writer's, re-run by parent): 20/20.
+- Behavioural harness in `/tmp`: 21/21. Runs the real inline page script
+  against a stub DOM and counts socket opens — connect-once-then-never-disturbed
+  across three simulated 10 s ticks, Stop sticking, `?mac=` bypassing the device
+  fetch, no auto-connect while choosing, stop disabled with zero devices, one
+  option per device, and notice retention.
+- T1 helper re-run after T2 landed: 28/28, so T2 did not regress T1.
+
+### T3 (observed on the dev machine, Node v26.10.0)
+
+- `bash scripts/install/test-scripts-load.sh` → **30 passed, 0 failed**.
+- `bash scripts/install/test-nginx-config.sh` → 1 passed, **1 failed**, 2
+  skipped. The failure is **pre-existing and environmental**, verified by
+  running the identical script on the baseline `main` worktree and getting the
+  same 1/1/2 result: `document root missing: ~/.witsaba/nginx/html`, plus nginx
+  not installed and nothing listening on :4173. This machine has never had the
+  Pi install run. Not caused by this feature, and not fixable here.
+- Nav consistency: `index.html`, `devices.html` and `stream.html` each expose
+  Home / Devices / Stream.
+- Added-line scans across the three T3 files: 0 `innerHTML`; new CSS references
+  only pre-existing tokens.
+
+### Repository checks NOT run (and why)
+
+- `scripts/test_ws_stream.py` — a device smoke test that needs real hardware
+  and a reachable chip. Not runnable here.
+- The full nginx suite beyond the above needs `~/.witsaba` and a running
+  stack. **Run on the Pi.**
+
+## Still pending (cannot be checked off this machine)
+
+- `GET /stream` serving `stream.html` through nginx `try_files`, and
+  `GET /stream?mac=<known>` painting real frames. nginx is not installed here,
+  so the URL-space claim is reasoned from the config (`/stream` does not start
+  with the `location /stream/` prefix, so it falls through to
+  `try_files $uri.html`), not executed. **Verify on the Pi.**
 - End-to-end frame painting against a real camera. Requires the Pi.
+- `test-nginx-config.sh` is fully green only on a machine where the install
+  has been run; on a fresh checkout it fails on the missing document root.
 
 ## Follow-ups
 
