@@ -57,6 +57,31 @@ ENV_FILE="$INSTALL_DIR/witsaba.env"
 [ -f "$ENV_FILE" ] || { log_err "$ENV_FILE missing. Run 01-postgresql.sh first."; exit 1; }
 set -a; . "$ENV_FILE"; set +a
 
+# -----------------------------------------------------------------------------
+# Validate the config before touching the database.
+#
+# A missing or empty variable used to reach the SQL layer and surface as a
+# syntax error like:
+#     ERROR:  zero-length delimited identifier at or near """
+# That is a terrible error for a configuration problem. Fail here instead,
+# naming the variable, and point at the step that generates this file.
+# -----------------------------------------------------------------------------
+REQUIRED_VARS=(
+    PG_HOST PG_PORT PG_DATABASE
+    PG_USER PG_WORKER_PASSWORD
+    MESSAGING_CORE_PG_USER MESSAGING_CORE_PG_PASSWORD
+    PG_ADMIN_USER
+)
+missing=()
+for var in "${REQUIRED_VARS[@]}"; do
+    [ -n "${!var:-}" ] || missing+=("$var")
+done
+if [ ${#missing[@]} -gt 0 ]; then
+    log_err "incomplete config in $ENV_FILE -- empty: ${missing[*]}"
+    log_err "re-run 01-postgresql.sh to regenerate it"
+    exit 1
+fi
+
 SUPERUSER="$(id -un)"
 PSQL="$HOMEBREW_PREFIX/opt/postgresql@16/bin/psql"
 
@@ -71,9 +96,11 @@ run_db()    { "${DB[@]}"    -c "$1"; }
 # Role names contain hyphens, which is illegal in a bare SQL identifier. Every
 # reference below is double quoted, exactly as services/postgres/init/03-schema.sql
 # does it. A single missing quote pair here is a syntax error, not a warning.
-Q_ADMIN="${PG_ADMIN_USER}"          # "pg-admin"
-Q_WORKER="${PG_USER}"               # "pg-worker"
-Q_MESSAGING="${PG_MESSAGING_CORE_USER}"  # "pg-messaging-core"
+Q_ADMIN="${PG_ADMIN_USER}"                   # pg-admin
+Q_WORKER="${PG_USER}"                        # pg-worker
+Q_MESSAGING="${MESSAGING_CORE_PG_USER}"      # pg-messaging-core
+WORKER_PW="${PG_WORKER_PASSWORD}"
+MESSAGING_PW="${MESSAGING_CORE_PG_PASSWORD}"
 
 role_exists() {
     "${ADMIN[@]}" -tAc "SELECT 1 FROM pg_roles WHERE rolname = '$1'" | grep -q 1
@@ -126,18 +153,18 @@ else
 fi
 
 if ! role_exists "$Q_WORKER"; then
-    run_admin "CREATE ROLE \"$Q_WORKER\" LOGIN PASSWORD '$PG_WORKER_PASSWORD'"
+    run_admin "CREATE ROLE \"$Q_WORKER\" LOGIN PASSWORD '$WORKER_PW'"
     log_ok "  created role \"$Q_WORKER\" (LOGIN)"
 else
-    run_admin "ALTER ROLE \"$Q_WORKER\" LOGIN PASSWORD '$PG_WORKER_PASSWORD' NOSUPERUSER NOCREATEDB NOCREATEROLE"
+    run_admin "ALTER ROLE \"$Q_WORKER\" LOGIN PASSWORD '$WORKER_PW' NOSUPERUSER NOCREATEDB NOCREATEROLE"
     log_ok "  role \"$Q_WORKER\" present (LOGIN, password synced)"
 fi
 
 if ! role_exists "$Q_MESSAGING"; then
-    run_admin "CREATE ROLE \"$Q_MESSAGING\" LOGIN PASSWORD '$PG_MESSAGING_CORE_PASSWORD'"
+    run_admin "CREATE ROLE \"$Q_MESSAGING\" LOGIN PASSWORD '$MESSAGING_PW'"
     log_ok "  created role \"$Q_MESSAGING\" (LOGIN)"
 else
-    run_admin "ALTER ROLE \"$Q_MESSAGING\" LOGIN PASSWORD '$PG_MESSAGING_CORE_PASSWORD' NOSUPERUSER NOCREATEDB NOCREATEROLE"
+    run_admin "ALTER ROLE \"$Q_MESSAGING\" LOGIN PASSWORD '$MESSAGING_PW' NOSUPERUSER NOCREATEDB NOCREATEROLE"
     log_ok "  role \"$Q_MESSAGING\" present (LOGIN, password synced)"
 fi
 
@@ -203,20 +230,20 @@ log_ok "Table witsaba.devices ready"
 # 6. Verify the real contract: each service role over TCP, with its password
 # -----------------------------------------------------------------------------
 log_info "Verifying \"$Q_WORKER\" can authenticate over TCP..."
-PGPASSWORD="$PG_WORKER_PASSWORD" "$PSQL" -h "$PG_HOST" -p "$PG_PORT" \
+PGPASSWORD="$WORKER_PW" "$PSQL" -h "$PG_HOST" -p "$PG_PORT" \
     -U "$Q_WORKER" -d "$PG_DATABASE" -v ON_ERROR_STOP=1 \
     -c "SELECT 1 AS ok" >/dev/null
 log_ok "  \"$Q_WORKER\" authenticates (SELECT allowed)"
 
 log_info "Verifying \"$Q_MESSAGING\" can read but not write..."
-PGPASSWORD="$PG_MESSAGING_CORE_PASSWORD" "$PSQL" -h "$PG_HOST" -p "$PG_PORT" \
+PGPASSWORD="$MESSAGING_PW" "$PSQL" -h "$PG_HOST" -p "$PG_PORT" \
     -U "$Q_MESSAGING" -d "$PG_DATABASE" -v ON_ERROR_STOP=1 \
     -c "SELECT count(*) AS devices FROM witsaba.devices" >/dev/null
 log_ok "  \"$Q_MESSAGING\" can read witsaba.devices"
 
 # A read-only role must be rejected on write. Expected to fail, so ON_ERROR_STOP
 # is deliberately off and the exit status is inverted.
-if PGPASSWORD="$PG_MESSAGING_CORE_PASSWORD" "$PSQL" -h "$PG_HOST" -p "$PG_PORT" \
+if PGPASSWORD="$MESSAGING_PW" "$PSQL" -h "$PG_HOST" -p "$PG_PORT" \
         -U "$Q_MESSAGING" -d "$PG_DATABASE" \
         -c "INSERT INTO witsaba.devices (mac, last_seen_at) VALUES ('00:00:00:00:00:00', now())" \
         >/dev/null 2>&1; then
