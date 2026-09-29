@@ -181,6 +181,25 @@ cat << CONF_MID
             proxy_read_timeout 5s;
         }
 
+        # --- camera viewer page -> static file --------------------------------
+        # `/stream` is the viewer page and `/stream/<mac>` is the WebSocket.
+        # Without this block the page is UNREACHABLE. nginx issues a
+        # trailing-slash redirect for any URI that is the stem of a prefix
+        # location, and it does so BEFORE try_files runs, so `/stream` is
+        # 301'd to `/stream/` -- which lands in the proxy block below and 404s
+        # at the gateway. `stream.html` is on disk and serving 200 at
+        # `/stream.html` the whole time; it is simply never consulted.
+        # Observed on the Pi: /api and /assets 301 to their slash forms for
+        # exactly the same reason, while /devices (no matching prefix
+        # location) serves 200 through try_files.
+        #
+        # An exact `=` match wins over a prefix match, so this takes
+        # precedence over `location /stream/` and nothing about the socket
+        # path changes.
+        location = /stream {
+            try_files /stream.html =404;
+        }
+
         # --- camera WebSocket -> messaging-core streaming gateway -------------
         # The upgrade headers are what turn this into a WebSocket instead of a
         # plain proxied request. The long read timeout matters: a camera frame
@@ -217,6 +236,13 @@ cat << CONF_MID
         }
 
         location = /devices.html {
+            add_header Cache-Control "no-store, no-cache, must-revalidate";
+        }
+
+        # Same reasoning as index.html and devices.html: a redeploy rewrites
+        # app.js/app.css, so a cached page shell can outlive the assets it
+        # references.
+        location = /stream.html {
             add_header Cache-Control "no-store, no-cache, must-revalidate";
         }
 
@@ -358,5 +384,6 @@ log_info "  document  : $NGINX_HTML"
 log_info "  config    : $NGINX_CONF"
 log_info "  /api/*    -> 127.0.0.1:$API_PORT"
 log_info "  /stream/* -> 127.0.0.1:$STREAM_PORT"
+log_info "  /stream   -> stream.html (camera viewer page)"
 log_info ""
 log_info "Next: ./12-systemd-services.sh  (creates the witsaba-nginx unit)"

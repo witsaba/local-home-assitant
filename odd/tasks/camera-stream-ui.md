@@ -45,7 +45,7 @@ chip, not introduced here — both documented in the page:
 
 | # | Decision | Rationale |
 |---|---|---|
-| 1 | `/stream` is the page, `/stream/{mac}` is the socket | `location /stream/` only matches the trailing-slash prefix, so `/stream` falls through to `try_files $uri $uri.html` and serves `stream.html`. No nginx change needed. Collapsing the two would require editing the proxy. |
+| 1 | `/stream` is the page, `/stream/{mac}` is the socket — **but this needed an explicit `location = /stream`, see T4** | My original reasoning was WRONG. I claimed `/stream` does not start with `/stream/`, so it falls through to `try_files $uri.html` and serves `stream.html`. True for location *matching*, but nginx additionally 301s any URI that is the **stem of a prefix location** to its slash form, and that redirect happens **before** `try_files` runs. Verified on the Pi: `/api` and `/assets` both 301 for the same reason, while `/devices` (no matching prefix) serves 200. An exact `=` match beats a prefix match, so `location = /stream { try_files /stream.html =404; }` resolves it. |
 | 2 | `?mac=` query param, with an in-page picker as fallback | Bookmarkable and shareable; a bare `/stream` still works for the single-camera case. |
 | 3 | Blob-URL frames, **not** base64 data URIs | `data:` URIs grow the string ~33% and the browser keeps every one alive. Blob URLs are revoked on swap, so a 10 fps feed holds one frame, not a growing heap. |
 | 4 | Revoke the previous blob URL *before* assigning the new `src` | The naive `img.src = createObjectURL(...)` leaks one URL per frame; at 10 fps that is 36 000 live blobs/hour. |
@@ -94,6 +94,8 @@ Not touched: `embedded/iot_cams/**`, `services/messaging-core/**`,
       single-viewer + `/capture` starvation notices. → `b9b16d8`
 - [x] **T3** Entry points in `index.html` and `devices.html`, then run the
       repository's own checks and close the feature document.
+- [x] **T4** nginx exact-match `location = /stream` + `= /stream.html`
+      no-store, with regression tests. Found by deploying to the Pi.
 
 ## Acceptance criteria
 
@@ -244,6 +246,51 @@ through `encodeURIComponent` into the query string and read back with
 `app.css` gains `.device-table__action` / `.device-table__view` using only
 existing tokens. Done inline, not delegated — see Route.
 
+### T4 — nginx routing fix, found by deploying to the Pi ✅
+
+The whole feature was broken on the Pi and none of the local checks could see
+it. `/stream` returned **301 → `/stream/` → 404**: the viewer page was
+unreachable, and every nav link pointed at it. `stream.html` was deployed and
+serving **200 at `/stream.html`** the whole time, simply never consulted.
+
+Root cause, proven by measurement rather than inference:
+
+| URI | has `location /x/`? | result |
+|---|---|---|
+| `/api` | yes | **301** → `/api/` (no `api.html` exists at all) |
+| `/assets` | yes | **301** → `/assets/` |
+| `/stream` | yes | **301** → `/stream/` |
+| `/devices` | no | **200** via `try_files $uri.html` |
+| `/discovery`, `/nope` | no | 404 |
+
+So the rule is: **nginx 301s the stem of a prefix location to its slash form,
+before `try_files` is consulted.** This is a consequence of `location /stream/`
+existing, not of anything about the page. My T1 design note asserted the
+opposite, and I had explicitly deferred proving it — "nginx is not installed on
+this machine, so the URL-space claim is reasoned from the config, not executed.
+**Verify on the Pi.**" That deferral is what let the error survive three
+commits.
+
+Fixed by adding an exact-match block, which outranks the prefix:
+
+```
+location = /stream {
+    try_files /stream.html =404;
+}
+```
+
+`scripts/install/13-nginx.sh` was explicitly out of scope when this feature
+started; it is now in scope, because the feature does not work without it. The
+same file also gained `location = /stream.html` with `no-store`, closing the
+follow-up logged during T1 (a cached page shell can outlive the assets it
+references after a redeploy).
+
+Regression tests added to `scripts/install/test-nginx-config.sh`: a static
+assertion that the exact-match block exists, plus live assertions that
+`/stream` returns 200 *and* that `/stream/<mac>` still reaches the gateway
+rather than being swallowed by the new block. The second one matters — an
+over-broad fix would silently break the socket.
+
 ## Verification evidence
 
 ### T1 (observed on the dev machine, Node v26.10.0)
@@ -308,9 +355,8 @@ existing tokens. Done inline, not delegated — see Route.
   adding one is outside the scope the user chose. Worth deciding before close:
   commit it somewhere, or accept that the next change to `witsaba.stream` is
   unguarded.
-- `= /stream.html` needs a `no-store` rule in `13-nginx.sh` to match
-  `= /index.html` / `= /devices.html`; otherwise a redeploy can leave a
-  browser on a stale shell.
+- `= /stream.html` no-store rule in `13-nginx.sh` — **done in T4**, no longer a
+  follow-up.
 - The chip's `/ws/cams` drops inbound frames, so runtime FPS/resolution
   control needs the `{"cmd":"stream"}` plane (deferred in
   `odd/tasks/ws-cams-endpoint.md`).
