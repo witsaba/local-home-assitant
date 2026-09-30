@@ -165,3 +165,30 @@ This PR is independent of `feat/camera-flash-capture` from a code
 perspective — the worker can land and ship with `?flash=1` even if
 the firmware doesn't honor it yet (the URL just produces a no-flash
 frame). The two PRs should still be reviewed independently.
+
+---
+
+## Verification log
+
+**T9 — `go build ./...` clean on linux/amd64 + darwin/arm64.** Cross-compile
+for both Pi (linux/arm64 in production, linux/amd64 here on macOS) and the
+operator's mac dev box. Both exit 0.
+
+**T9 — `go test -race ./...` clean on darwin/arm64.** Every package passes
+under the race detector:
+
+  internal/infrastructure/config       ok
+  internal/infrastructure/db           ok
+  internal/infrastructure/devices      ok
+  internal/infrastructure/logger       ok
+  internal/infrastructure/probe        ok
+  internal/infrastructure/routetable   ok
+  internal/jobs/discovery              ok
+  internal/jobs/surveillance           ok (37 cases)
+  internal/worker                      ok
+
+The surveillance package alone covers 37 test cases across types.go
+(boundary semantics of Window.Contains), capture.go (HTTP client
+defaults + captureOne error paths), storage.go (path format + MAC
+normalization + permissions), and surveillance.go (full Run() flow with
+httptest.Server + fake repo + fake clock + tmp storage root).
