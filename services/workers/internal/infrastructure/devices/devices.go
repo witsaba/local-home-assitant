@@ -16,6 +16,7 @@ package devices
 
 import (
 	"context"
+	"time"
 
 	"github.com/witsaba/local-home-assitant/services/workers/internal/types"
 )
@@ -33,6 +34,19 @@ type Repository interface {
 	// Upsert writes ev into the store. The MAC field is the primary key.
 	// Returns the underlying error if the write fails.
 	Upsert(ctx context.Context, ev types.DiscoveryEvent) error
+
+	// ListFresh returns every device whose last_seen_at is strictly
+	// greater than the cutoff time. Used by the surveillance job
+	// to enumerate cameras without re-running the subnet scan.
+	// Implementations MUST return the rows in deterministic order
+	// (by MAC ascending) so the per-tick log output is reproducible
+	// across runs.
+	//
+	// olderThan is treated as an exclusive bound: a row whose
+	// last_seen_at equals olderThan is excluded. Implementations
+	// MUST surface query errors unchanged.
+	ListFresh(ctx context.Context, olderThan time.Time) ([]types.DiscoveryEvent, error)
+
 	// Close releases any held resources. Safe to call multiple times.
 	Close()
 }

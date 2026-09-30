@@ -235,3 +235,31 @@ func TestPgxUpsertAllFields(t *testing.T) {
 		t.Errorf("SourceIP: got %v, want %v", args[4], "192.168.1.100")
 	}
 }
+
+// --- ListFresh tests ---
+
+// ListFresh requires a QuerierQuery (Query) implementation in
+// addition to Querier (Exec). The production wiring is
+// pgxpool.Pool which satisfies both. Unit tests cover the
+// "no Query interface configured" guard only; the SQL scan loop
+// is exercised by integration tests against a real Postgres (see
+// the testcontainers test in integration_test.go).
+
+func TestPgxListFresh_NoQueryInterfaceReturnsError(t *testing.T) {
+	t.Parallel()
+
+	q := &fakeQuerier{} // does NOT implement Query
+	repo := NewPgx(q)
+	// Force the qq field to be nil — happens when Querier doesn't
+	// also implement QuerierQuery (e.g. production wiring where
+	// the pool is shared but tests pass a stripped Querier).
+	repo.qq = nil
+
+	_, err := repo.ListFresh(context.Background(), time.Now())
+	if err == nil {
+		t.Fatal("ListFresh(no Query) = nil err, want non-nil")
+	}
+	if !strings.Contains(err.Error(), "no Query interface") {
+		t.Errorf("Err = %q, want contains 'no Query interface'", err)
+	}
+}

@@ -20,6 +20,7 @@ import (
 	"github.com/witsaba/local-home-assitant/services/workers/internal/infrastructure/devices"
 	loggerinfra "github.com/witsaba/local-home-assitant/services/workers/internal/infrastructure/logger"
 	"github.com/witsaba/local-home-assitant/services/workers/internal/jobs/discovery"
+	"github.com/witsaba/local-home-assitant/services/workers/internal/jobs/surveillance"
 	"github.com/witsaba/local-home-assitant/services/workers/internal/types"
 	"github.com/witsaba/local-home-assitant/services/workers/internal/worker"
 )
@@ -62,6 +63,10 @@ func run() int {
 		zap.Int("discovery_interval_s", cfg.DiscoveryIntervalSeconds),
 		zap.Int("discovery_pool_size", cfg.DiscoveryWorkerPoolSize),
 		zap.Int("discovery_probe_timeout_ms", cfg.DiscoveryProbeTimeoutMs),
+		zap.Int("surveillance_interval_min", cfg.SurveillanceIntervalMinutes),
+		zap.Int("surveillance_capture_timeout_s", cfg.SurveillanceCaptureTimeoutSeconds),
+		zap.Int("surveillance_device_freshness_min", cfg.SurveillanceDeviceFreshnessMinutes),
+		zap.String("surveillance_root_dir", cfg.SurveillanceRootDir),
 		zap.Stringer("db_url", cfg.ToPoolConfig()),
 	)
 
@@ -121,7 +126,22 @@ func run() int {
 		log,
 	)
 
-	scheduler := worker.New([]worker.Job{discoveryJob}, emit, log)
+	// Surveillance job — reads witsaba.devices (populated by the
+	// discovery job) and captures one JPEG per camera per tick.
+	// The job does NOT emit DiscoveryEvents — the shared events
+	// channel stays clean of non-discovery events. It writes
+	// files to cfg.SurveillanceRootDir (default
+	// ~/.witsaba/cameras/) and logs at INFO/WARN per tick.
+	surveillanceJob := surveillance.NewJob(
+		time.Duration(cfg.SurveillanceIntervalMinutes)*time.Minute,
+		time.Duration(cfg.SurveillanceCaptureTimeoutSeconds)*time.Second,
+		time.Duration(cfg.SurveillanceDeviceFreshnessMinutes)*time.Minute,
+		cfg.SurveillanceRootDir,
+		repo,
+		log,
+	)
+
+	scheduler := worker.New([]worker.Job{discoveryJob, surveillanceJob}, emit, log)
 	consumer := discovery.NewConsumer(events, repo, log)
 
 	// SIGINT/SIGTERM cancels ctx via signal.NotifyContext.

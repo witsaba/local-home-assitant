@@ -30,6 +30,12 @@ func (f *fakeRepo) Upsert(_ context.Context, ev types.DiscoveryEvent) error {
 	return f.failErr
 }
 
+func (f *fakeRepo) ListFresh(_ context.Context, _ time.Time) ([]types.DiscoveryEvent, error) {
+	// Unused by discovery tests. Return an empty slice so the
+	// type still satisfies devices.Repository.
+	return nil, nil
+}
+
 func (f *fakeRepo) Close() {}
 
 func (f *fakeRepo) Calls() []types.DiscoveryEvent {
