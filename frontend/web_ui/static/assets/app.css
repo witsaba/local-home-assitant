@@ -579,6 +579,68 @@ a:hover { color: var(--color-accent-hover); }
   min-height: 200px;
 }
 
+/* Toolbar row that sits as the first grid item. Spans all auto-fit
+ * columns so it doesn't participate in the column count and stays a
+ * single right-aligned row regardless of how many tiles the grid
+ * holds. When the grid host itself enters fullscreen mode, the
+ * toolbar is part of the fullscreen element and remains visible. */
+.cctv-grid__toolbar {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.cctv-grid__toolbar-btn {
+  /* Same neutral surface and border as a feature card so the
+   * toolbar reads as part of the page chrome, not a tile control.
+   * 44x44 is one step above the 40x40 minimum so a primary
+   * page-level action is discoverable without being loud. */
+  min-width: 44px;
+  min-height: 44px;
+  padding: var(--space-2);
+  background: var(--color-surface);
+  color: var(--color-fg);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.cctv-grid__toolbar-btn:hover {
+  background: var(--color-surface-hover);
+}
+
+.cctv-grid__toolbar-btn:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+}
+
+.cctv-grid__toolbar-btn svg {
+  width: 20px;
+  height: 20px;
+  display: block;
+}
+
+/* When the grid host itself is the fullscreen target, fill the
+ * viewport, give the tiles more breathing room, and raise the
+ * minimum tile width so a few cameras fill the screen instead of
+ * staying at the page-width size. The auto-fit rule keeps the
+ * grid responsive across portrait / landscape / wide displays. */
+.cctv-grid:fullscreen {
+  background: var(--color-bg);
+  padding: var(--space-5);
+  gap: var(--space-5);
+  overflow: auto;
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+}
+
 .cctv-tile {
   /* Per-tile card. Same neutral surface and border as a feature
    * card so the page reads as one product. */

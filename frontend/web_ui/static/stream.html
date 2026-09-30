@@ -37,7 +37,23 @@
           class="cctv-grid"
           id="cctv-grid-host"
           aria-label="Live cameras"
-        ></section>
+        >
+          <!-- Toolbar sits as the first grid item so it stays visible
+               when the grid host itself enters fullscreen mode (the
+               button calls requestFullscreen on gridHost, which
+               promotes the entire section — toolbar + tiles — to
+               fullscreen). grid-column: 1 / -1 lets the toolbar span
+               all auto-fit columns and not affect the tile layout. -->
+          <div class="cctv-grid__toolbar" id="cctv-toolbar">
+            <button
+              class="cctv-grid__toolbar-btn"
+              id="cctv-fullscreen-all-btn"
+              type="button"
+              aria-label="Fullscreen all cameras"
+              title="Fullscreen all cameras"
+            ></button>
+          </div>
+        </section>
 
         <section
           class="panel"
@@ -182,6 +198,19 @@
         var tiles = Object.create(null);
 
         function renderCCTV() {
+          /* Toolbar lives once at the top of the grid host. Wire its
+           * fullscreen-all button to call enterFullscreen on the grid
+           * host itself, so the whole CCTV view (toolbar + every tile)
+           * goes fullscreen together. The per-tile expand buttons
+           * remain independent: clicking one fullscreens just that
+           * tile's stage. */
+          var fullscreenAllBtn = document.getElementById("cctv-fullscreen-all-btn");
+          if (fullscreenAllBtn) {
+            fullscreenAllBtn.appendChild(buildExpandIcon());
+            fullscreenAllBtn.addEventListener("click", function () {
+              enterFullscreen(gridHost);
+            });
+          }
           witsaba.onVisible(refreshTiles, 10000);
         }
 
