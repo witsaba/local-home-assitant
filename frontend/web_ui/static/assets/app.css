@@ -559,6 +559,196 @@ a:hover { color: var(--color-accent-hover); }
   }
 }
 
+/* ---- CCTV grid ----------------------------------------------------------- */
+/* Multi-camera tile grid for /stream. Each tile is 16:9, opens one
+ * witsaba.stream.open({ retry:false }) socket, and shows the
+ * no-signal fallback image on terminal status. The grid is
+ * auto-fit: 1 column on a phone, 2 on a small tablet, 3-4 on a
+ * wide display. No JS layout, no toggle. */
+
+.cctv-grid {
+  display: grid;
+  gap: var(--space-4);
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+}
+
+.cctv-grid:empty {
+  /* The empty state is rendered into the host by showState(); the
+   * grid itself is just a positioned container. Min-height so a
+   * loading or empty grid does not collapse the page layout. */
+  min-height: 200px;
+}
+
+.cctv-tile {
+  /* Per-tile card. Same neutral surface and border as a feature
+   * card so the page reads as one product. */
+  position: relative;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  box-shadow: var(--shadow-sm);
+}
+
+.cctv-tile__stage {
+  /* The 16:9 stage is the fullscreen target. aspect-ratio keeps the
+   * tile's geometry identical whether the live frame has loaded,
+   * is mid-connect, or has fallen back to the no-signal SVG. */
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  background: var(--color-bg);
+}
+
+.cctv-tile__image,
+.cctv-tile__fallback {
+  /* Live image and fallback SVG are stacked at the same position;
+   * hidden toggles which one is visible. image holds its own
+   * intrinsic size from the chip's JPEG; the fallback SVG scales
+   * to the stage because object-fit:contain. */
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+.cctv-tile__fallback {
+  /* The SVG uses currentColor; the surrounding color picks up
+   * the page's --color-fg-muted so dark mode is automatic. The
+   * padding gives the icon a small inset so it does not bleed
+   * against the tile edge. */
+  color: var(--color-fg-muted);
+  padding: var(--space-5);
+}
+
+.cctv-tile__fallback[hidden],
+.cctv-tile__image[hidden] { display: none; }
+
+.cctv-tile__overlay {
+  /* Overlay grid: name top-left, badge top-right, expand button
+   * bottom-left, timestamp bottom-right. Pointer events disabled
+   * on the container so the live image underneath remains
+   * draggable for "save as"; re-enabled on each child control. */
+  position: absolute;
+  inset: 0;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-rows: auto 1fr auto;
+  pointer-events: none;
+  padding: var(--space-3);
+  gap: var(--space-2);
+}
+
+.cctv-tile__overlay > * { pointer-events: auto; }
+
+.cctv-tile__overlay-name {
+  grid-column: 1;
+  grid-row: 1;
+  justify-self: start;
+  align-self: start;
+  padding: var(--space-1) var(--space-3);
+  background: rgba(15, 18, 22, 0.55);
+  color: var(--color-fg-inverse);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  border-radius: var(--radius-sm);
+  /* Truncate the name on narrow tiles without overlapping the
+   * badge. max-width leaves room for the badge. */
+  max-width: calc(100% - 90px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cctv-tile__overlay-badge {
+  grid-column: 2;
+  grid-row: 1;
+  justify-self: end;
+  align-self: start;
+}
+
+.cctv-tile__overlay-time {
+  grid-column: 2;
+  grid-row: 3;
+  justify-self: end;
+  align-self: end;
+  padding: var(--space-1) var(--space-3);
+  background: rgba(15, 18, 22, 0.55);
+  color: var(--color-fg-inverse);
+  font-size: var(--text-xs);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  border-radius: var(--radius-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.cctv-tile__expand {
+  grid-column: 1;
+  grid-row: 3;
+  justify-self: start;
+  align-self: end;
+  min-width: 40px;
+  min-height: 40px;
+  padding: var(--space-2);
+  background: rgba(15, 18, 22, 0.55);
+  color: var(--color-fg-inverse);
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.cctv-tile__expand:hover {
+  background: rgba(15, 18, 22, 0.78);
+  border-color: rgba(255, 255, 255, 0.35);
+}
+
+.cctv-tile__expand:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+}
+
+.cctv-tile__expand svg {
+  width: 16px;
+  height: 16px;
+  display: block;
+}
+
+/* Single-camera focused viewer uses #single-viewer-host which is
+ * hidden in grid mode and shown in ?mac= mode. The legacy
+ * .stream-viewer* rules above already cover its internals. */
+
+/* Standing chip-level notes. Visible only in grid mode; the same
+ * facts are inline inside the single-camera viewer. */
+.cctv-legend {
+  margin-top: var(--space-5);
+  padding: var(--space-3) var(--space-4);
+  border-top: 1px solid var(--color-border);
+  color: var(--color-fg-subtle);
+  font-size: var(--text-xs);
+  line-height: var(--leading-relaxed);
+}
+
+.cctv-legend p { margin: 0; }
+.cctv-legend p + p { margin-top: var(--space-1); }
+
+@media (prefers-reduced-motion: reduce) {
+  .cctv-tile,
+  .cctv-tile__image,
+  .cctv-tile__fallback,
+  .cctv-tile__overlay {
+    animation: none;
+    transition: none;
+  }
+}
+
+/* The expand button lives inside the tile; on a touchscreen there
+ * is no hover. Its 40x40 tap target is the only consideration
+ * needed beyond the desktop rules above. */
+
 /* ---- footer --------------------------------------------------------------- */
 .page-footer {
   margin-top: var(--space-6);
