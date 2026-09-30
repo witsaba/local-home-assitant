@@ -158,6 +158,24 @@ void app_main(void)
                  esp_err_to_name(cam_r));
     }
 
+    /* W1 (feat/camera-flash-capture) — bring up the GPIO 4 flash
+     * LEDC channel and disable the sensor's advanced AEC DSP so
+     * flash-lit frames do not overexpose. Idempotent; if
+     * cam_reader_init failed above we still attempt the LEDC
+     * setup because it does not require the sensor — the sensor-
+     * side `set_aec2` call inside the init function will
+     * gracefully no-op when esp_camera_sensor_get() returns NULL.
+     *
+     * Failure here is non-fatal: /capture without ?flash=1 still
+     * works; only flash photography is affected. */
+    ESP_LOGI(TAG, "initializing flash LED...");
+    esp_err_t fl_r = cam_reader_flash_init();
+    if (fl_r != ESP_OK) {
+        ESP_LOGE(TAG, "cam_reader_flash_init failed: %s -- "
+                      "flash photography will be unavailable",
+                 esp_err_to_name(fl_r));
+    }
+
     /* W2 (feat/iot-cams-ws-cams-endpoint) — long-lived stream
      * consumer task. Pulls JPEGs from cam_reader at
      * CAM_STREAM_PERIOD_MS and ships them to the WS viewer sink
