@@ -179,17 +179,34 @@ static esp_err_t capture_get_handler(httpd_req_t *req)
         return ESP_FAIL;
     }
 
-    /* Parse ?flash=1 from the URI. httpd_query_key_value writes the
-     * decoded value (URL-decoded) into the caller-provided buffer
-     * and returns ESP_OK on a hit. ESP_ERR_NOT_FOUND means no
-     * "flash" key was present (i.e. no flash). Any other return
-     * is treated conservatively as no flash. We only enable flash
+    /* Parse ?flash=1 from the URI. httpd_query_key_value expects
+     * a *pure* query string (e.g. "flash=1"), NOT the full URI
+     * ("/capture?flash=1"). The matcher strips the query string
+     * before invoking us (see httpd_uri.c's use of UF_PATH
+     * field_data), so req->uri still contains the full string
+     * and we must extract the query substring via the dedicated
+     * helper. httpd_req_get_url_query_str writes the query
+     * string into our buffer without the leading '?'.
+     *
+     * httpd_query_key_value returns ESP_OK on a hit, ESP_ERR_NOT_FOUND
+     * if the key is absent (i.e. no flash). Any other return is
+     * treated conservatively as no flash. We only enable flash
      * when the value is exactly the ASCII string "1". */
     bool flash = false;
-    char flash_val[8] = {0};
-    if (httpd_query_key_value(req->uri, "flash",
-                              flash_val, sizeof(flash_val)) == ESP_OK) {
-        flash = (flash_val[0] == '1' && flash_val[1] == '\0');
+    char query_buf[32] = {0};
+    esp_err_t qry_err = httpd_req_get_url_query_str(req, query_buf,
+                                                    sizeof(query_buf));
+    ESP_LOGD(TAG, "capture: req->uri='%s' query='%s' (err=%s)",
+             req->uri, query_buf, esp_err_to_name(qry_err));
+    if (qry_err == ESP_OK) {
+        char flash_val[8] = {0};
+        esp_err_t kv_err = httpd_query_key_value(query_buf, "flash",
+                                                 flash_val, sizeof(flash_val));
+        ESP_LOGD(TAG, "capture: query_key_value flash err=%s val='%s'",
+                 esp_err_to_name(kv_err), flash_val);
+        if (kv_err == ESP_OK) {
+            flash = (flash_val[0] == '1' && flash_val[1] == '\0');
+        }
     }
 
     camera_fb_t *fb = NULL;
