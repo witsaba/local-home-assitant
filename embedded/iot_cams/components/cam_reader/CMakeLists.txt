@@ -8,6 +8,10 @@
 #   - esp_psram    — needed at boot to drive fb_count / fb_location
 #   - nvs_flash    — defensive; the sensor driver may route state
 #                    through NVS
+#   - esp_driver_ledc — owns the GPIO 4 flash LEDC channel (Timer 1 /
+#                    Channel 1). Timer/Channel 0 is reserved for the
+#                    camera XCLK; using Timer 1 here is the only safe
+#                    slot that doesn't stall the camera.
 idf_component_register(
     SRCS "cam_reader.c"
     INCLUDE_DIRS "include"
@@ -16,5 +20,5 @@ idf_component_register(
     # any consumer that includes cam_reader.h transitively needs
     # the esp_camera.h include path.
     REQUIRES esp32-camera
-    PRIV_REQUIRES nvs_flash esp_psram esp_timer
+    PRIV_REQUIRES nvs_flash esp_psram esp_timer esp_driver_ledc
 )
