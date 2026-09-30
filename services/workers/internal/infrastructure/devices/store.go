@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -22,6 +23,14 @@ type Querier interface {
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 }
 
+// QuerierQuery is the subset needed for ListFresh. It is kept
+// separate from Querier to avoid widening the surface for callers
+// that only need Upsert/Exec. The two interfaces are satisfied by
+// pgxpool.Pool; tests inject whichever combination they need.
+type QuerierQuery interface {
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+}
+
 // Pgx is the Postgres-backed Repository. It owns no connection state
 // of its own; the singleton pool (or any Querier) is supplied at
 // construction.
@@ -31,7 +40,8 @@ type Querier interface {
 // If the table is missing, the database will return an error and the
 // repository will surface it to the caller.
 type Pgx struct {
-	q Querier
+	q  Querier
+	qq QuerierQuery
 }
 
 // NewPgx returns a Pgx repository backed by q.
@@ -40,7 +50,21 @@ type Pgx struct {
 // Use this constructor in production code with db.Get().
 // Tests may pass a fake Querier for isolated unit testing.
 func NewPgx(q Querier) *Pgx {
+	// In production both fields point at the same pgxpool.Pool
+	// (it satisfies both interfaces). Tests that need to
+	// override behavior inject fakes through the with-query
+	// constructor below.
+	if qq, ok := q.(QuerierQuery); ok {
+		return &Pgx{q: q, qq: qq}
+	}
 	return &Pgx{q: q}
+}
+
+// NewPgxWithQuery returns a Pgx repository with a separate query
+// interface. Only used by tests that need to swap the Query
+// implementation without affecting Exec.
+func NewPgxWithQuery(q Querier, qq QuerierQuery) *Pgx {
+	return &Pgx{q: q, qq: qq}
 }
 
 // upsertSQL is the single statement the repository executes. The
@@ -114,6 +138,71 @@ func (p *Pgx) Upsert(ctx context.Context, ev types.DiscoveryEvent) error {
 // This method exists to satisfy the Repository interface.
 func (p *Pgx) Close() {
 	// No-op: pool singleton is closed via db.Close().
+}
+
+// listFreshSQL returns rows from witsaba.devices whose last_seen_at
+// is strictly greater than $1. The MAC is the primary key and is
+// returned as a normalized 12-char lowercase hex string (matches
+// the contract used by /whoami and the discovery job's upsert).
+// Ordering by MAC ascending gives the surveillance job a stable
+// iteration order across runs, which makes log output reproducible.
+const listFreshSQL = `
+SELECT mac, name, fw, chip, host(last_source_ip), last_seen_at
+FROM witsaba.devices
+WHERE last_seen_at > $1
+ORDER BY mac ASC
+`
+
+// ListFresh returns every device whose last_seen_at is strictly
+// greater than the cutoff time. Used by the surveillance job to
+// enumerate cameras without re-running the subnet scan.
+//
+// olderThan is exclusive: a row whose last_seen_at equals
+// olderThan is excluded. This avoids surfacing devices that were
+// observed exactly at the freshness boundary as "fresh".
+//
+// The query is the only place we call host() (Postgres inet
+// → text) so the result scan lines up with the existing column
+// types and no driver-side cast is required.
+//
+// Returns rows in MAC-ascending order for deterministic
+// surveillance output.
+func (p *Pgx) ListFresh(ctx context.Context, olderThan time.Time) ([]types.DiscoveryEvent, error) {
+	if p.qq == nil {
+		return nil, fmt.Errorf("ListFresh: no Query interface configured")
+	}
+	rows, err := p.qq.Query(ctx, listFreshSQL, olderThan)
+	if err != nil {
+		return nil, fmt.Errorf("ListFresh: query: %w", err)
+	}
+	defer rows.Close()
+
+	var out []types.DiscoveryEvent
+	for rows.Next() {
+		var ev types.DiscoveryEvent
+		var name, fw, chip *string
+		var sourceIP *string
+		if err := rows.Scan(&ev.MAC, &name, &fw, &chip, &sourceIP, &ev.DiscoveredAt); err != nil {
+			return nil, fmt.Errorf("ListFresh: scan: %w", err)
+		}
+		if name != nil {
+			ev.Name = *name
+		}
+		if fw != nil {
+			ev.FW = *fw
+		}
+		if chip != nil {
+			ev.Chip = *chip
+		}
+		if sourceIP != nil {
+			ev.SourceIP = *sourceIP
+		}
+		out = append(out, ev)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("ListFresh: rows: %w", err)
+	}
+	return out, nil
 }
 
 // Queryer extends Querier with the Query method needed for schema validation.

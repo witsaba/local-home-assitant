@@ -2,6 +2,7 @@ package devices
 
 import (
 	"context"
+	"time"
 
 	"go.uber.org/zap"
 
@@ -42,3 +43,10 @@ func (n *Noop) Upsert(_ context.Context, ev types.DiscoveryEvent) error {
 
 // Close is a no-op for Noop.
 func (n *Noop) Close() {}
+
+// ListFresh returns an empty slice. The noop repository has no
+// backing store, so there are no devices to enumerate. Used in
+// unit tests and dev-mode runs without Postgres.
+func (n *Noop) ListFresh(_ context.Context, _ time.Time) ([]types.DiscoveryEvent, error) {
+	return nil, nil
+}
