@@ -1,6 +1,7 @@
 package config_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/witsaba/local-home-assitant/services/workers/internal/infrastructure/config"
@@ -227,6 +228,10 @@ func resetEnv(t *testing.T) {
 		"DISCOVERY_INTERVAL_SECONDS",
 		"DISCOVERY_PROBE_TIMEOUT_MS",
 		"DISCOVERY_WORKER_POOL_SIZE",
+		"SURVEILLANCE_INTERVAL_MINUTES",
+		"SURVEILLANCE_CAPTURE_TIMEOUT_SECONDS",
+		"SURVEILLANCE_DEVICE_FRESHNESS_MINUTES",
+		"SURVEILLANCE_ROOT_DIR",
 		"LOG_LEVEL",
 		"PG_HOST",
 		"PG_PORT",
@@ -237,4 +242,112 @@ func resetEnv(t *testing.T) {
 		t.Setenv(k, "")
 	}
 	t.Setenv("PG_WORKER_PASSWORD", "test-pw")
+}
+
+func TestLoad_SurveillanceDefaults(t *testing.T) {
+	resetEnv(t)
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.SurveillanceIntervalMinutes != 15 {
+		t.Errorf("SurveillanceIntervalMinutes = %d, want 15", cfg.SurveillanceIntervalMinutes)
+	}
+	if cfg.SurveillanceCaptureTimeoutSeconds != 10 {
+		t.Errorf("SurveillanceCaptureTimeoutSeconds = %d, want 10",
+			cfg.SurveillanceCaptureTimeoutSeconds)
+	}
+	if cfg.SurveillanceDeviceFreshnessMinutes != 5 {
+		t.Errorf("SurveillanceDeviceFreshnessMinutes = %d, want 5",
+			cfg.SurveillanceDeviceFreshnessMinutes)
+	}
+	if cfg.SurveillanceRootDir == "" {
+		t.Errorf("SurveillanceRootDir = empty, want non-empty default")
+	}
+	// The default should expand to ~/.witsaba/cameras.
+	if !strings.HasSuffix(cfg.SurveillanceRootDir, "/.witsaba/cameras") {
+		t.Errorf("SurveillanceRootDir = %q, want suffix '/.witsaba/cameras'",
+			cfg.SurveillanceRootDir)
+	}
+}
+
+func TestLoad_SurveillanceEnvOverrides(t *testing.T) {
+	resetEnv(t)
+	t.Setenv("SURVEILLANCE_INTERVAL_MINUTES", "30")
+	t.Setenv("SURVEILLANCE_CAPTURE_TIMEOUT_SECONDS", "20")
+	t.Setenv("SURVEILLANCE_DEVICE_FRESHNESS_MINUTES", "10")
+	t.Setenv("SURVEILLANCE_ROOT_DIR", "/srv/witsaba/cameras")
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.SurveillanceIntervalMinutes != 30 {
+		t.Errorf("SurveillanceIntervalMinutes = %d, want 30", cfg.SurveillanceIntervalMinutes)
+	}
+	if cfg.SurveillanceCaptureTimeoutSeconds != 20 {
+		t.Errorf("SurveillanceCaptureTimeoutSeconds = %d, want 20",
+			cfg.SurveillanceCaptureTimeoutSeconds)
+	}
+	if cfg.SurveillanceDeviceFreshnessMinutes != 10 {
+		t.Errorf("SurveillanceDeviceFreshnessMinutes = %d, want 10",
+			cfg.SurveillanceDeviceFreshnessMinutes)
+	}
+	if cfg.SurveillanceRootDir != "/srv/witsaba/cameras" {
+		t.Errorf("SurveillanceRootDir = %q, want /srv/witsaba/cameras",
+			cfg.SurveillanceRootDir)
+	}
+}
+
+func TestLoad_InvalidSurveillanceInterval(t *testing.T) {
+	resetEnv(t)
+	t.Setenv("SURVEILLANCE_INTERVAL_MINUTES", "0")
+
+	_, err := config.Load()
+	if err == nil {
+		t.Fatal("Load(SURVEILLANCE_INTERVAL_MINUTES=0) = nil err, want non-nil")
+	}
+	if !strings.Contains(err.Error(), "SURVEILLANCE_INTERVAL_MINUTES") {
+		t.Errorf("Err = %q, want contains 'SURVEILLANCE_INTERVAL_MINUTES'", err)
+	}
+}
+
+func TestLoad_InvalidSurveillanceCaptureTimeout(t *testing.T) {
+	resetEnv(t)
+	t.Setenv("SURVEILLANCE_CAPTURE_TIMEOUT_SECONDS", "-5")
+
+	_, err := config.Load()
+	if err == nil {
+		t.Fatal("Load(SURVEILLANCE_CAPTURE_TIMEOUT_SECONDS=-5) = nil err, want non-nil")
+	}
+	if !strings.Contains(err.Error(), "SURVEILLANCE_CAPTURE_TIMEOUT_SECONDS") {
+		t.Errorf("Err = %q, want contains 'SURVEILLANCE_CAPTURE_TIMEOUT_SECONDS'", err)
+	}
+}
+
+func TestLoad_InvalidSurveillanceDeviceFreshness(t *testing.T) {
+	resetEnv(t)
+	t.Setenv("SURVEILLANCE_DEVICE_FRESHNESS_MINUTES", "0")
+
+	_, err := config.Load()
+	if err == nil {
+		t.Fatal("Load(SURVEILLANCE_DEVICE_FRESHNESS_MINUTES=0) = nil err, want non-nil")
+	}
+	if !strings.Contains(err.Error(), "SURVEILLANCE_DEVICE_FRESHNESS_MINUTES") {
+		t.Errorf("Err = %q, want contains 'SURVEILLANCE_DEVICE_FRESHNESS_MINUTES'", err)
+	}
+}
+
+func TestLoad_EmptySurveillanceRootDir(t *testing.T) {
+	resetEnv(t)
+	t.Setenv("SURVEILLANCE_ROOT_DIR", "   ")
+
+	_, err := config.Load()
+	if err == nil {
+		t.Fatal("Load(SURVEILLANCE_ROOT_DIR='   ') = nil err, want non-nil")
+	}
+	if !strings.Contains(err.Error(), "SURVEILLANCE_ROOT_DIR") {
+		t.Errorf("Err = %q, want contains 'SURVEILLANCE_ROOT_DIR'", err)
+	}
 }

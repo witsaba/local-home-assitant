@@ -5,6 +5,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -18,6 +19,12 @@ type Config struct {
 	DiscoveryIntervalSeconds int
 	DiscoveryProbeTimeoutMs  int
 	DiscoveryWorkerPoolSize  int
+
+	// Surveillance settings.
+	SurveillanceIntervalMinutes       int
+	SurveillanceCaptureTimeoutSeconds int
+	SurveillanceDeviceFreshnessMinutes int
+	SurveillanceRootDir                string
 
 	// Logging.
 	LogLevel string
@@ -44,7 +51,17 @@ func Load() (*Config, error) {
 		DiscoveryIntervalSeconds: envInt("DISCOVERY_INTERVAL_SECONDS", 60),
 		DiscoveryProbeTimeoutMs:  envInt("DISCOVERY_PROBE_TIMEOUT_MS", 1500),
 		DiscoveryWorkerPoolSize:  envInt("DISCOVERY_WORKER_POOL_SIZE", 64),
-		LogLevel:                 envStr("LOG_LEVEL", "info"),
+
+		// Surveillance defaults — see odd/tasks/surveillance-worker.md.
+		// The user-facing standing direction is 'every 15 minutes,
+		// capture from every online camera, save to ~/.witsaba/cameras/'.
+		// All four env vars are optional; defaults match that direction.
+		SurveillanceIntervalMinutes:        envInt("SURVEILLANCE_INTERVAL_MINUTES", 15),
+		SurveillanceCaptureTimeoutSeconds:  envInt("SURVEILLANCE_CAPTURE_TIMEOUT_SECONDS", 10),
+		SurveillanceDeviceFreshnessMinutes: envInt("SURVEILLANCE_DEVICE_FRESHNESS_MINUTES", 5),
+		SurveillanceRootDir:                envStr("SURVEILLANCE_ROOT_DIR", defaultSurveillanceRootDir()),
+
+		LogLevel: envStr("LOG_LEVEL", "info"),
 
 		// Postgres connection defaults.
 		PGHost:     envStr("PG_HOST", "127.0.0.1"),
@@ -114,7 +131,42 @@ func validate(cfg *Config) error {
 	if cfg.PGPassword == "" {
 		return fmt.Errorf("PG_WORKER_PASSWORD must be non-empty")
 	}
+	if cfg.SurveillanceIntervalMinutes <= 0 {
+		return fmt.Errorf("SURVEILLANCE_INTERVAL_MINUTES must be > 0, got %d",
+			cfg.SurveillanceIntervalMinutes)
+	}
+	if cfg.SurveillanceCaptureTimeoutSeconds <= 0 {
+		return fmt.Errorf("SURVEILLANCE_CAPTURE_TIMEOUT_SECONDS must be > 0, got %d",
+			cfg.SurveillanceCaptureTimeoutSeconds)
+	}
+	if cfg.SurveillanceDeviceFreshnessMinutes <= 0 {
+		return fmt.Errorf("SURVEILLANCE_DEVICE_FRESHNESS_MINUTES must be > 0, got %d",
+			cfg.SurveillanceDeviceFreshnessMinutes)
+	}
+	if strings.TrimSpace(cfg.SurveillanceRootDir) == "" {
+		return fmt.Errorf("SURVEILLANCE_ROOT_DIR must be non-empty")
+	}
 	return nil
+}
+
+// defaultSurveillanceRootDir returns "$HOME/.witsaba/cameras" or,
+// if HOME is unset, a path under os.UserHomeDir()'s fallback. We
+// resolve the path at config-load time so a misconfigured HOME is
+// surfaced immediately rather than at the first capture.
+//
+// Returns the resolved path as a string. Errors from
+// os.UserHomeDir() fall back to "." + "/.witsaba/cameras" which
+// is almost certainly wrong but is loud enough to surface.
+func defaultSurveillanceRootDir() string {
+	home := os.Getenv("HOME")
+	if home == "" {
+		if u, err := os.UserHomeDir(); err == nil {
+			home = u
+		} else {
+			home = "."
+		}
+	}
+	return filepath.Join(home, ".witsaba", "cameras")
 }
 
 func envInt(key string, fallback int) int {
