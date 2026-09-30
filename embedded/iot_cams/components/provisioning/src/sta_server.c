@@ -154,6 +154,13 @@ static esp_err_t whoami_get_handler(httpd_req_t *req)
 
 /* GET /capture — single JPEG frame from the OV2640.
  *
+ * Optional query parameter: `?flash=1` enables the GPIO 4 flash
+ * LED for 200 ms before the sensor integrates the frame (see
+ * cam_reader_capture_with_flash). Any other value, or absent,
+ * means no flash — existing behavior. The clock-window decision
+ * lives on the caller (the surveillance worker); this endpoint
+ * honors the flag unconditionally.
+ *
  * Concurrency contract: cam_reader owns the camera mutex; this
  * handler maps the three documented outcomes to HTTP status codes:
  *
@@ -172,8 +179,21 @@ static esp_err_t capture_get_handler(httpd_req_t *req)
         return ESP_FAIL;
     }
 
+    /* Parse ?flash=1 from the URI. httpd_query_key_value writes the
+     * decoded value (URL-decoded) into the caller-provided buffer
+     * and returns ESP_OK on a hit. ESP_ERR_NOT_FOUND means no
+     * "flash" key was present (i.e. no flash). Any other return
+     * is treated conservatively as no flash. We only enable flash
+     * when the value is exactly the ASCII string "1". */
+    bool flash = false;
+    char flash_val[8] = {0};
+    if (httpd_query_key_value(req->uri, "flash",
+                              flash_val, sizeof(flash_val)) == ESP_OK) {
+        flash = (flash_val[0] == '1' && flash_val[1] == '\0');
+    }
+
     camera_fb_t *fb = NULL;
-    esp_err_t r = cam_reader_capture(&fb);
+    esp_err_t r = cam_reader_capture_with_flash(&fb, flash);
 
     if (r == ESP_ERR_TIMEOUT) {
         ESP_LOGW(TAG, "capture: mutex timeout; another caller busy");
@@ -183,7 +203,8 @@ static esp_err_t capture_get_handler(httpd_req_t *req)
         return ESP_OK;
     }
     if (r != ESP_OK || fb == NULL) {
-        ESP_LOGE(TAG, "capture: sensor returned no frame");
+        ESP_LOGE(TAG, "capture: sensor returned no frame (flash=%d)",
+                 (int)flash);
         httpd_resp_send_500(req);
         cam_reader_release(NULL);  /* drop the mutex */
         return ESP_FAIL;
@@ -194,12 +215,18 @@ static esp_err_t capture_get_handler(httpd_req_t *req)
                        "inline; filename=capture.jpg");
     httpd_resp_set_hdr(req, "Cache-Control",
                        "no-store, no-cache, must-revalidate, max-age=0");
+    if (flash) {
+        /* Echo the flag for clients that want to verify the server
+         * honored it (especially helpful while debugging the
+         * 200ms pre-charge timing on hardware). */
+        httpd_resp_set_hdr(req, "X-Witsaba-Flash", "1");
+    }
 
     esp_err_t res = httpd_resp_send(req, (const char *)fb->buf, fb->len);
     cam_reader_release(fb);
 
     if (res == ESP_OK) {
-        ESP_LOGD(TAG, "capture: served frame");
+        ESP_LOGD(TAG, "capture: served frame flash=%d", (int)flash);
     } else {
         ESP_LOGE(TAG, "capture: httpd_resp_send: %s", esp_err_to_name(res));
     }
