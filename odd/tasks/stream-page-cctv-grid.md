@@ -69,6 +69,8 @@ top, not a new helper.
 | 11 | **Two standing notices (single-viewer policy, `/capture` starvation) move to a small footer legend at the bottom of the grid** | They are facts about the chip, not per-camera facts. They belong at the page level, not on individual tiles. They were previously in `stream.html:65-75`; that placement was correct for one viewer and wrong for a grid. |
 | 12 | **No new helper namespace.** Extend `witsaba.stream.open` only. | `witsaba.cctv` would be a wrapper with the same plumbing — same WebSocket, same blob lifecycle, same visibility handling, same status events. One boolean flag is enough. |
 | 13 | **No changes to `services/messaging-core/**` or `scripts/install/**`** | Out of scope. The `messaging-core` viewer-leak defect from `camera-stream-ui.md` T5 follow-ups is a separate Go service change. The grid does not fix it; the grid does not make it worse either (the leak is per-tab regardless of N). |
+| 14 | **Fullscreen-all: a toolbar button promotes the entire grid host to fullscreen**, in addition to the per-tile expand buttons (decision 7) | Decided with operator. The per-tile button is for "I want this camera huge"; the fullscreen-all button is for "I want the whole CCTV view filling the screen". Both call the existing `enterFullscreen()` helper; they differ only in which element they target. The toolbar sits inside the grid section so it remains visible in fullscreen mode. |
+| 15 | **Fullscreen-all layout: same auto-fit grid, larger minimum tile (420px vs 280px) and larger gap** | In fullscreen the available viewport is much larger, so the 280 px in-page minimum leaves 6+ cramped tiles on a desktop. Bumping the min to 420 px gives 3–4 well-proportioned tiles on a 1920 px wide display, while staying at 1 column on portrait phone (auto-fit floors to 1). |
 
 ## Acceptance criteria
 
@@ -94,6 +96,12 @@ top, not a new helper.
 - Per-tile fullscreen: clicking the expand button calls
   `requestFullscreen()` on the tile's stage element. The button
   is keyboard-reachable (Tab order) and ≥ 40×40 px.
+- Fullscreen-all: a "Fullscreen all cameras" button in the
+  toolbar (first child of the grid section, spans all auto-fit
+  columns) calls `requestFullscreen()` on the grid section
+  itself. The toolbar stays visible inside the fullscreen
+  element; per-tile expand buttons remain independent and
+  continue to fullscreen only their own tile.
 - `top-bar__subtitle` reads `"<N> of <M> cameras online · refresh 10s"`
   and updates as the active list changes.
 - Standing chip notices appear once at the bottom of the grid, not
@@ -642,7 +650,7 @@ Pre-existing behaviour (case 5) preserved verbatim. retry:false is additive.
 
 `node --check` on the extracted inline page script: parses clean.
 
-Behavioral harness in `/tmp/harness-cctv.mjs` — **6 / 6 cases passed:**
+Behavioral harness in `/tmp/harness-cctv.mjs` — **7 / 7 cases passed** (case G added with T5):
 
 | # | Case | Asserts |
 |---|---|---|
@@ -650,8 +658,9 @@ Behavioral harness in `/tmp/harness-cctv.mjs` — **6 / 6 cases passed:**
 | B | 0-device response | Empty state rendered, no tiles, subtitle `"0 of 0 cameras online"`. |
 | C | Status `error` transition | Fallback `<img>` becomes visible, live `<img>` hidden, badge text becomes `"offline"`. |
 | D | Refresh diff (1 MAC removed) | Exactly one tile torn down; the surviving MAC is the one still in the active list. |
-| E | Fullscreen expand button | Clicking `.cctv-tile__expand` calls `requestFullscreen()` on the tile's stage element (with a mocked `Element.prototype.requestFullscreen` for the assertion). |
+| E | Per-tile fullscreen expand | Clicking `.cctv-tile__expand` calls `requestFullscreen()` on the tile's stage element. |
 | F | `?mac=<mac>` query parameter | Branches to single-camera mode: grid host hidden, single viewer visible, no API fetch. |
+| G | Fullscreen-all toolbar button | Toolbar is the first child of the grid host; clicking `.cctv-grid__toolbar-btn` calls `requestFullscreen()` on the grid host itself; per-tile stages are NOT promoted. |
 
 Structural scan (added lines vs `main`):
 
@@ -660,16 +669,17 @@ Structural scan (added lines vs `main`):
 | `innerHTML` added | 0 |
 | Raw hex added | 0 (overlays use `rgba(15, 18, 22, …)` — alpha variants of the existing `--shadow-sm` neutral, already present in `app.css`) |
 | Bare px radius or unitless spacing added | 0 (all new CSS uses existing `--space-*`, `--radius-*`, `--color-*` tokens) |
-| `.cctv-*` classes | 21 (all referenced by `stream.html`) |
-| CSS braces balanced | 104 open / 104 close |
+| `.cctv-*` classes | 13 unique selectors (21 total class references including sub-elements) |
+| CSS braces balanced | 110 open / 110 close |
 
 ### T4 — Verification on the Pi (deferred)
 
-T1–T3 land on `feat/stream-page-cctv-grid` at:
+T1–T5 land on `feat/stream-page-cctv-grid` at:
 
 - T1: `c8747fd`
 - T2: `afba0cf`
 - T3: `22c5537`
+- T5: `a7428d2`
 
 `13-nginx.sh` is unchanged. The `location = /stream` exact-match block from `odd/tasks/camera-stream-ui.md` T4 is in place; the new grid page is served at `/stream` exactly the same way the old single-camera page was.
 
@@ -678,4 +688,39 @@ To verify on the Pi after deploy:
 - `GET /stream` returns the grid page (200). Confirms `13-nginx.sh` routing.
 - `GET /stream?mac=<known>` returns the same page; page initializes in single-camera mode.
 - `node --check frontend/web_ui/static/assets/app.js` exit 0. Verified locally.
-- Manual: load `/stream` on desktop and mobile; confirm 1 col on phone and 3–4 cols on a wide display; confirm the no-signal SVG renders for any tile whose MAC is unknown to messaging-core; confirm the expand button promotes the tile to fullscreen and ESC returns.
+- Manual: load `/stream` on desktop and mobile; confirm 1 col on phone and 3–4 cols on a wide display; confirm the no-signal SVG renders for any tile whose MAC is unknown to messaging-core; confirm the per-tile expand button promotes one tile to fullscreen; confirm the toolbar's "Fullscreen all cameras" button promotes the entire grid (toolbar + every tile) to fullscreen.
+
+### T5 — Fullscreen-all toolbar button ✅
+
+Decision 14: a "Fullscreen all cameras" button in a small toolbar that sits
+as the first grid item. The toolbar lives inside the grid section
+(`#cctv-grid-host`) so it stays visible when the section itself enters
+fullscreen mode (only the section and its descendants are promoted by
+`requestFullscreen`). The toolbar uses `grid-column: 1 / -1` so it spans
+all auto-fit columns without participating in the column count or
+affecting the tile layout.
+
+The button reuses two existing primitives:
+
+- `enterFullscreen(el)` from the per-tile button — same
+  webkit/moz/ms fullscreen prefix fallbacks and try/catch wrapper.
+- `buildExpandIcon()` from the per-tile button — same corner-brackets
+  icon shape so the affordance reads consistently across both buttons.
+
+In fullscreen mode the grid switches to `repeat(auto-fit, minmax(420px,
+1fr))` with `gap: var(--space-5)` and `padding: var(--space-5)`. The
+larger minimum tile width keeps 3–4 cameras well-proportioned on a
+1920×1080 display instead of staying at the cramped in-page size; the
+auto-fit still floors to 1 column on a portrait phone.
+
+The button is keyboard-reachable (Tab order), has a 44×44 px tap
+target (one step above the 40×40 minimum so a primary page-level
+action reads as discoverable), and uses existing tokens for its colors
+(`--color-surface`, `--color-border-strong`, `--color-fg`,
+`--color-surface-hover`, `--color-focus-ring`).
+
+Verification:
+
+- 7 / 7 CCTV harness cases pass (was 6; case G is new).
+- 0 `innerHTML` added; 0 raw hex added; CSS balanced 110/110.
+- 92 added lines total (62 CSS + 30 HTML).
