@@ -93,6 +93,59 @@ void cam_reader_release(camera_fb_t *fb);
 uint32_t cam_reader_frames_captured_get(void);
 uint32_t cam_reader_fb_drops_get(void);
 
+/** Initialize the GPIO 4 flash LED PWM and adjust the sensor for
+ *  flash photography.
+ *
+ *  Boots a single LEDC channel (Timer 1, Channel 1 — chosen to
+ *  avoid the Timer 0 / Channel 0 already used by the camera driver
+ *  for XCLK) at 8-bit / 2 kHz / ~80 % duty on GPIO 4. The LED
+ *  starts off (duty = 0). On the sensor side, disables
+ *  `aec2` (advanced AEC digital signal processing) so the OV2640's
+ *  auto-exposure can adapt properly to the flash-lit scene —
+ *  otherwise AECDSP overrides AELevel and the frame is overexposed
+ *  per arendst/Tasmota#23222.
+ *
+ *  Idempotent: returns `ESP_ERR_INVALID_STATE` on a second call.
+ *  Returns `ESP_ERR_INVALID_STATE` if `cam_reader_init` has not
+ *  been called yet (the sensor must exist before we can disable
+ *  aec2 on it).
+ *
+ *  Called once from `app_main` after `cam_reader_init`.
+ *
+ *  @return ESP_OK on success, otherwise an esp_err_t propagated
+ *          from `ledc_timer_config` / `ledc_channel_config`.
+ */
+esp_err_t cam_reader_flash_init(void);
+
+/** Capture one JPEG frame with the flash LED illuminated.
+ *  Flash control is owned by this function:
+ *    - LED on at ~80 % duty
+ *    - 200 ms pre-charge (lets the OV2640 auto white balance
+ *      stabilize before the sensor integrates the frame; 50 ms
+ *      is empirically too short and produces off-color frames —
+ *      see community teardowns like Mi-Bee Studio's
+ *      ai-thinker-esp32-cam)
+ *    - existing `cam_reader_capture` (sema-take + fb_get)
+ *    - LED off (UNCONDITIONALLY on every exit path, including
+ *      the 503 / 500 paths; a missed LEDC reset leaves the LED
+ *      pinned on, which is both a power drain and a misleading
+ *      user signal)
+ *
+ *  When `flash == false`, this is a thin wrapper around
+ *  `cam_reader_capture(&fb)` with byte-for-byte identical
+ *  behavior. Pre-charge and post-charge never run.
+ *
+ *  The mutex budget (5 s) is unchanged; the 200 ms pre-charge
+ *  happens INSIDE the mutex so a concurrent caller cannot slip
+ *  in and observe the LED on while no capture is happening.
+ *
+ *  @param[out] fb see `cam_reader_capture`. Same semantics.
+ *  @param[in]  flash true to enable flash, false to skip.
+ *
+ *  @return same outcomes as `cam_reader_capture`.
+ */
+esp_err_t cam_reader_capture_with_flash(camera_fb_t **fb, bool flash);
+
 #ifdef __cplusplus
 }
 #endif
