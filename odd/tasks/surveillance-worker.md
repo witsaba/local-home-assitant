@@ -192,3 +192,17 @@ The surveillance package alone covers 37 test cases across types.go
 defaults + captureOne error paths), storage.go (path format + MAC
 normalization + permissions), and surveillance.go (full Run() flow with
 httptest.Server + fake repo + fake clock + tmp storage root).
+
+**T10 — manual sanity check on the Pi (operator).** Out of scope for
+this branch — the unit tests in `internal/jobs/surveillance/` already
+exercise the full Job.Run() flow against a httptest.Server (see
+`TestJob_Run_HappyPath_WritesFiles` and `TestJob_Run_OutsideFlashWindow_NoFlashQueryParam`).
+A real-hardware smoke test would:
+
+  1. `make build` from `services/workers/`
+  2. Set the env vars (or use defaults) and `./bin/workers &`
+  3. Wait for the next tick
+  4. `ls -la ~/.witsaba/cameras/<today>/` — should show one file per camera per tick
+
+That manual loop is intentionally not in scope here. The Linux host
+deployment is the operator's job (T6 of Worktree A + cross-deploy).
