@@ -248,6 +248,9 @@
      * @param {function} [opts.onStatus] - (state, detail) => void
      * @param {function} [opts.onFrame]  - (stats) => void, stats = { frames }
      * @param {function} [opts.onError]  - (Error) => void
+     * @param {boolean}  [opts.retry=true] - if false, the first failure
+     *   closes the controller permanently. The caller is responsible for
+     *   re-opening (e.g. on the next /api/devices/active poll).
      * @returns {{ close: function }} controller
      */
     function open(opts) {
@@ -399,6 +402,21 @@
       function attemptReconnect() {
         if (closed) return;
         if (isHidden) return;
+
+        /* retry:false — first failure is terminal. Caller waits for the
+         * next device-list refresh to recreate the stream. Used by the CCTV
+         * grid so a tile that cannot reach messaging-core / the chip does
+         * not churn the chip socket while the operator is reading another
+         * tile. Per spec in odd/tasks/stream-page-cctv-grid.md, decision 8.
+         *
+         * Default retry:true is unchanged; the focused single-camera viewer
+         * at /stream?mac= keeps its 1->16 s bounded reconnect ladder. */
+        if (opts.retry === false) {
+          emitStatus("error", "unreachable");
+          closed = true;
+          cleanup();
+          return;
+        }
 
         if (reconnectAttempt >= MAX_ATTEMPTS) {
           /* Exhausted retries — stop and report permanent error. */
