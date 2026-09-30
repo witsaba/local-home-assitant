@@ -616,4 +616,66 @@ are small enough for inline. Verification is one batch.
 
 ## Acceptance run summary
 
-(To be filled in after the work lands and the Pi deploy completes.)
+### T1 — `assets/no-signal.svg` ✅
+
+- File well-formed XML (`xmllint --noout` exit 0).
+- 1,056 bytes on disk; `currentColor` strokes; 16:9 viewBox.
+- Renders cleanly in `read` view.
+
+### T2 — `witsaba.stream.open({ retry: false })` ✅
+
+`node --check frontend/web_ui/static/assets/app.js` exit 0.
+
+Behavioral harness in `/tmp/harness-retry.mjs` — **5 / 5 cases passed:**
+
+| # | Case | Asserts |
+|---|---|---|
+| 1 | retry:false, no frame, close | First failure emits `("error","unreachable")`; no `reconnecting`; no pending timer; no frames painted. |
+| 2 | retry:true (default), no frame, close | First failure emits `reconnecting`; exactly one pending timer at the 1 s rung. |
+| 3 | retry:false, frames paint then drop | Emits `live` on first frame; on subsequent drop emits `("error","unreachable")`; no reconnect; no pending timer. |
+| 4 | retry:false, idempotent close | Three sequential `controller.close()` calls do not throw, leave no timers, close the socket. |
+| 5 | retry:true walks the ladder | Without onopen (immediate-refusal scenario), drops consume rungs 1→2→4→8→16 s; the sixth drop emits `("error","max retries exceeded")`. |
+
+Pre-existing behaviour (case 5) preserved verbatim. retry:false is additive.
+
+### T3 — `stream.html` rewrite + `.cctv-*` CSS ✅
+
+`node --check` on the extracted inline page script: parses clean.
+
+Behavioral harness in `/tmp/harness-cctv.mjs` — **6 / 6 cases passed:**
+
+| # | Case | Asserts |
+|---|---|---|
+| A | 3-device response | 3 tiles rendered, 3 sockets opened, subtitle `"3 cameras online · refresh 10s"`. |
+| B | 0-device response | Empty state rendered, no tiles, subtitle `"0 of 0 cameras online"`. |
+| C | Status `error` transition | Fallback `<img>` becomes visible, live `<img>` hidden, badge text becomes `"offline"`. |
+| D | Refresh diff (1 MAC removed) | Exactly one tile torn down; the surviving MAC is the one still in the active list. |
+| E | Fullscreen expand button | Clicking `.cctv-tile__expand` calls `requestFullscreen()` on the tile's stage element (with a mocked `Element.prototype.requestFullscreen` for the assertion). |
+| F | `?mac=<mac>` query parameter | Branches to single-camera mode: grid host hidden, single viewer visible, no API fetch. |
+
+Structural scan (added lines vs `main`):
+
+| Criterion | Result |
+|---|---|
+| `innerHTML` added | 0 |
+| Raw hex added | 0 (overlays use `rgba(15, 18, 22, …)` — alpha variants of the existing `--shadow-sm` neutral, already present in `app.css`) |
+| Bare px radius or unitless spacing added | 0 (all new CSS uses existing `--space-*`, `--radius-*`, `--color-*` tokens) |
+| `.cctv-*` classes | 21 (all referenced by `stream.html`) |
+| CSS braces balanced | 104 open / 104 close |
+
+### T4 — Verification on the Pi (deferred)
+
+T1–T3 land on `feat/stream-page-cctv-grid` at:
+
+- T1: `c8747fd`
+- T2: `afba0cf`
+- T3: `22c5537`
+
+`13-nginx.sh` is unchanged. The `location = /stream` exact-match block from `odd/tasks/camera-stream-ui.md` T4 is in place; the new grid page is served at `/stream` exactly the same way the old single-camera page was.
+
+To verify on the Pi after deploy:
+
+- `GET /stream` returns the grid page (200). Confirms `13-nginx.sh` routing.
+- `GET /stream?mac=<known>` returns the same page; page initializes in single-camera mode.
+- `node --check frontend/web_ui/static/assets/app.js` exit 0. Verified locally.
+- Manual: load `/stream` on desktop and mobile; confirm 1 col on phone and 3–4 cols on a wide display; confirm the no-signal SVG renders for any tile whose MAC is unknown to messaging-core; confirm the expand button promotes the tile to fullscreen and ESC returns.
