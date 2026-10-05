@@ -131,10 +131,14 @@ a permission error in production.
 Each is one reviewable commit. U1–U3 are pure additive Go with no worker
 change, so the gallery is usable before retention lands.
 
-- [ ] **U1** — `ListAll` on `DeviceRepository` (+ Pgx impl, tests); new
+- [~] **U1** — `ListAll` on `DeviceRepository` (+ Pgx impl, tests); new
   `internal/infrastructure/gallery` package with validated path construction,
   day enumeration and moment grouping; `GET /api/gallery/days` and
   `GET /api/gallery/day`; `GALLERY_ROOT_DIR` config; wiring in `main.go`.
+  Code written and committed as `e995c59`, but **not verified**: the module
+  does not compile in this environment. See "Blocked" below. The gallery and
+  devices packages pass `go test -race`; the api package cannot be built.
+  The commit is progress only and must not be merged as-is.
 - [ ] **U2** — `GET /api/gallery/img` with ETag / Last-Modified / 304 and the
   truncated-frame guard.
 - [ ] **U3** — `GET /api/gallery/thumb` with the atomic `.thumbs` cache, the
@@ -192,3 +196,36 @@ change, so the gallery is usable before retention lands.
 | Retention misconfiguration deletes history | U4 `Lstat` + date-parse + strict-older-than guard |
 | Truncated newest frame renders broken | U2 404 + `no-signal.svg` |
 | Thumbnail cache needs disk writes in a hardened unit | U3 revisits the unit explicitly |
+
+## Blocked (2026-02): module does not build in this environment
+
+U1 is written and committed (`e995c59`) but cannot be verified.
+`go build ./...` in `services/messaging-core` fails with:
+
+    no required module provides package
+    github.com/witsaba/local-home-assistant/services/messaging-core/internal/infrastructure/gallery
+
+`internal/infrastructure/gallery` builds and tests cleanly when addressed by
+relative path (`go test ./internal/infrastructure/gallery/`), and every other
+package builds. Only *import* resolution fails.
+
+**This is not a defect in the change.** A throwaway package created in the
+untouched main checkout fails the same way, and a newly created package cannot
+import even a pre-existing committed package. Ruled out: `go.mod` contents,
+`vendor/`, `go.work`, symlinks, filesystem case, `.gitignore`, the build cache,
+a fresh `GOCACHE`, `go clean -cache`, `GODEBUG=goindex=0`, `GOFLAGS=-mod=mod`,
+package depth, toolchain version, and any persisted Go env file.
+
+A second, separate symptom: the workspace filesystem is intermittently
+unstable. `cd` into existing paths fails with `ENOENT` and file visibility
+flips between runs, so shell work needs retries and `cwd=` instead of `cd`.
+
+**Consequences for the plan**
+
+- U1, U2 and U3 all need a new package. Until resolution works, none can be
+  verified, so no further work units should start.
+- Fallback if it stays broken: put the gallery code inside an existing package
+  so no new import is required. That is a design compromise and needs a
+  decision, not a silent substitution.
+- No review candidate exists yet; `e995c59` is explicitly unverified and must
+  not be merged.
