@@ -10,6 +10,7 @@ static/
   index.html      home: system status, feature cards
   devices.html    active device list, polls the API
   stream.html     live camera viewer for one device
+  gallery.html    capture archive, grouped by capture moment
   favicon.svg
   assets/app.css  design tokens and components
   assets/app.js   fetch/polling/relative-time helpers, witsaba.* namespace

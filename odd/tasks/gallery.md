@@ -145,7 +145,7 @@ change, so the gallery is usable before retention lands.
 - [x] **U4** — `SURVEILLANCE_RETENTION_DAYS` in the worker with the
   `Lstat`-verified day-folder prune, plus the `SURVEILLANCE_*` block in
   `env.example` (currently missing entirely).
-- [ ] **U5** — `frontend/web_ui/static/gallery.html`, nav link in the three
+- [x] **U5** — `frontend/web_ui/static/gallery.html`, nav link in the three
   existing pages, date picker + moment grid, and
   `location = /gallery { try_files /gallery.html =404; }` in `13-nginx.sh`
   plus the post-deploy assert list. The exact-match block is required: a path

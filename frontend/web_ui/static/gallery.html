@@ -1,0 +1,490 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Gallery &middot; Witsaba</title>
+    <meta
+      name="description"
+      content="The periodic surveillance captures, grouped by capture moment."
+    />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/assets/app.css" />
+  </head>
+  <body>
+    <div class="page">
+      <header class="top-bar">
+        <div class="top-bar__brand">
+          <h1 class="top-bar__title">Gallery</h1>
+          <span class="top-bar__subtitle" id="subtitle">loading&hellip;</span>
+        </div>
+        <nav class="top-bar__nav" aria-label="Primary">
+          <a class="top-bar__link" href="/">Home</a>
+          <a class="top-bar__link" href="/devices">Devices</a>
+          <a class="top-bar__link" href="/stream">Stream</a>
+          <a class="top-bar__link" href="/gallery" aria-current="page">Gallery</a>
+        </nav>
+      </header>
+
+      <main>
+        <section class="panel">
+          <div class="panel__head">
+            <h2 class="panel__title">Captures</h2>
+            <span
+              class="status-chip status-chip--info"
+              id="api-chip"
+              role="status"
+            >
+              <span class="status-chip__dot" aria-hidden="true"></span>
+              <span data-status-label>checking</span>
+            </span>
+          </div>
+          <div class="panel__body">
+            <div class="gallery-controls">
+              <label class="visually-hidden" for="day-picker">Capture day</label>
+              <select
+                class="stream-picker"
+                id="day-picker"
+                aria-describedby="day-summary"
+              ></select>
+              <p class="gallery-summary" id="day-summary">
+                Choose a day to browse.
+              </p>
+            </div>
+          </div>
+          <div class="panel__body panel__body--flush" id="gallery-host">
+            <p class="state">Loading&hellip;</p>
+          </div>
+        </section>
+      </main>
+
+      <footer class="page-footer">
+        <span
+          >Captures are written every
+          <span id="interval-note">15</span> minutes by the workers service and
+          kept for <span id="retention-note">30</span> days. Times are the
+          camera's own clock.</span
+        >
+        <span id="last-updated"></span>
+      </footer>
+    </div>
+
+    <!-- Lightbox. Built by the page, so it ships empty. Without JS the
+         tiles below are ordinary links and the image simply opens, so
+         the page degrades to a plain index rather than to nothing. -->
+    <dialog class="gallery-lightbox" id="lightbox" aria-label="Full capture">
+      <button
+        class="gallery-lightbox__nav gallery-lightbox__nav--prev"
+        id="lb-prev"
+        type="button"
+        aria-label="Previous capture"
+      >
+        &#8249;
+      </button>
+      <button
+        class="gallery-lightbox__nav gallery-lightbox__nav--next"
+        id="lb-next"
+        type="button"
+        aria-label="Next capture"
+      >
+        &#8250;
+      </button>
+      <figure class="gallery-lightbox__figure">
+        <img class="gallery-lightbox__img" id="lb-img" alt="" />
+        <figcaption class="gallery-lightbox__caption">
+          <span id="lb-caption"></span>
+          <button
+            class="gallery-lightbox__close"
+            id="lb-close"
+            type="button"
+            aria-label="Close"
+          >
+            &#10005;
+          </button>
+        </figcaption>
+      </figure>
+    </dialog>
+
+    <script src="/assets/app.js"></script>
+    <script>
+      (function () {
+        "use strict";
+
+        var host = document.getElementById("gallery-host");
+        var chip = document.getElementById("api-chip");
+        var subtitle = document.getElementById("subtitle");
+        var picker = document.getElementById("day-picker");
+        var summary = document.getElementById("day-summary");
+        var lastUpdated = document.getElementById("last-updated");
+
+        var lightbox = document.getElementById("lightbox");
+        var lbImg = document.getElementById("lb-img");
+        var lbCaption = document.getElementById("lb-caption");
+        var lbPrev = document.getElementById("lb-prev");
+        var lbNext = document.getElementById("lb-next");
+        var lbClose = document.getElementById("lb-close");
+
+        /* The tick is the capture filename prefix in Pi local wall-clock
+         * time. It is reformatted with a string replace and never handed
+         * to new Date(): a Date would interpret it in the *browser's*
+         * timezone, so a Pi on UTC would show every capture an hour or a
+         * day off from the day it is filed under. Same for the date. */
+        function formatTick(tick) {
+          return String(tick).replace(/-/g, ":");
+        }
+
+        function shotLabel(shot) {
+          return shot.name || shot.mac;
+        }
+
+        /* Thumbnail width is a request, not a guarantee: the server may
+         * return a smaller image when re-encoding cannot reach the exact
+         * width, and never upscales. These are the widths the endpoint
+         * accepts; anything else is a 400. */
+        function thumbURL(date, moment, shot) {
+          return (
+            "/api/gallery/thumb?date=" +
+            encodeURIComponent(date) +
+            "&t=" +
+            encodeURIComponent(moment) +
+            "&mac=" +
+            encodeURIComponent(shot.mac) +
+            "&w=320"
+          );
+        }
+
+        /* ---- lightbox ------------------------------------------------------ */
+
+        /* Frames in the currently rendered day, flattened to one list so
+         * left/right can walk the whole day rather than only one moment.
+         * Only URLs and labels are held, never decoded pixels, so this
+         * stays a few tens of KB at 288 frames. */
+        var dayShots = [];
+        var lightboxIndex = -1;
+
+        function showLightbox(index) {
+          if (index < 0 || index >= dayShots.length) return;
+          lightboxIndex = index;
+
+          var entry = dayShots[index];
+          lbImg.src = entry.imageUrl;
+          lbImg.alt = "Capture at " + formatTick(entry.time);
+          lbCaption.textContent =
+            formatTick(entry.time) + " - " + entry.label + " (" + entry.mac + ")";
+
+          /* Hidden, not removed, so the caption row keeps its width. */
+          lbPrev.hidden = index === 0;
+          lbNext.hidden = index === dayShots.length - 1;
+
+          if (typeof lightbox.showModal === "function") {
+            if (!lightbox.open) lightbox.showModal();
+          }
+        }
+
+        function closeLightbox() {
+          lightboxIndex = -1;
+          /* Drop the full frame on close. A day can hold hundreds and
+           * holding them decoded is the one thing on this page that
+           * could approach a memory ceiling. */
+          lbImg.removeAttribute("src");
+          if (typeof lightbox.close === "function" && lightbox.open) {
+            lightbox.close();
+          }
+        }
+
+        lbClose.addEventListener("click", closeLightbox);
+        lbPrev.addEventListener("click", function () {
+          showLightbox(lightboxIndex - 1);
+        });
+        lbNext.addEventListener("click", function () {
+          showLightbox(lightboxIndex + 1);
+        });
+
+        /* Click on the backdrop (the dialog element itself, outside the
+         * figure) closes. A click inside the figure must not. */
+        lightbox.addEventListener("click", function (event) {
+          if (event.target === lightbox) closeLightbox();
+        });
+
+        document.addEventListener("keydown", function (event) {
+          if (!lightbox.open) return;
+          if (event.key === "ArrowLeft") showLightbox(lightboxIndex - 1);
+          if (event.key === "ArrowRight") showLightbox(lightboxIndex + 1);
+        });
+
+        /* ---- rendering ----------------------------------------------------- */
+
+        function renderMoment(date, moment, entries) {
+          var tiles = moment.shots.map(function (shot) {
+            var label = shotLabel(shot);
+
+            var img = witsaba.el("img", {
+              class: "gallery-tile__image",
+              src: thumbURL(date, moment.time, shot),
+              alt: label + " at " + formatTick(moment.time),
+              loading: "lazy",
+              decoding: "async",
+            });
+
+            /* A 503 here means the newest frame was still being written
+             * when the day was read. Show the placeholder rather than a
+             * broken-image icon, and leave the tile clickable so the
+             * operator can still try the full frame. The handler closes
+             * over the tile it belongs to rather than walking up from the
+             * img, so it cannot silently decorate the wrong element if
+             * the markup changes. */
+            var tile = witsaba.el(
+              "a",
+              {
+                class: "gallery-tile",
+                href: shot.image_url,
+                "data-index": entries.length,
+                title: "Open the full capture: " + label,
+              },
+              [
+                witsaba.el("div", { class: "gallery-tile__stage" }, [
+                  img,
+                  witsaba.el("img", {
+                    class: "gallery-tile__fallback",
+                    src: "/assets/no-signal.svg",
+                    alt: "",
+                  }),
+                ]),
+                witsaba.el("div", { class: "gallery-tile__label" }, [
+                  witsaba.el("span", {
+                    class: "gallery-tile__name",
+                    text: label,
+                  }),
+                  witsaba.el("span", { class: "gallery-tile__mac", text: shot.mac }),
+                ]),
+              ],
+            );
+
+            img.addEventListener("error", function () {
+              tile.classList.add("gallery-tile--broken");
+            });
+
+            entries.push({
+              imageUrl: shot.image_url,
+              time: moment.time,
+              label: label,
+              mac: shot.mac,
+            });
+
+            return tile;
+          });
+
+          return witsaba.el("section", { class: "gallery-moment" }, [
+            witsaba.el("div", { class: "gallery-moment__head" }, [
+              witsaba.el("span", {
+                class: "gallery-moment__time",
+                text: formatTick(moment.time),
+              }),
+              witsaba.el("span", {
+                class: "gallery-moment__count",
+                text:
+                  moment.shots.length === 1
+                    ? "1 camera"
+                    : moment.shots.length + " cameras",
+              }),
+            ]),
+            witsaba.el("div", { class: "gallery-grid" }, tiles),
+          ]);
+        }
+
+        function renderDay(day) {
+          dayShots = [];
+
+          if (!day.moments.length) {
+            witsaba.showState(
+              host,
+              "empty",
+              "No captures on this day",
+              "The folder exists but holds no readable frames. The most recent capture of a day can still be mid-write; pick another day.",
+            );
+            witsaba.setStatus(chip, "warning", "0 moments", true);
+            subtitle.textContent = "0 moments";
+            summary.textContent = day.date + " - no captures";
+            return;
+          }
+
+          var nodes = day.moments.map(function (moment) {
+            return renderMoment(day.date, moment, dayShots);
+          });
+
+          host.replaceChildren.apply(host, nodes);
+
+          var shotCount = day.moments.reduce(function (total, moment) {
+            return total + moment.shots.length;
+          }, 0);
+
+          witsaba.setStatus(chip, "healthy", day.moments.length + " moments", false);
+          subtitle.textContent =
+            day.moments.length + " moments - " + shotCount + " captures";
+          summary.textContent =
+            day.date +
+            " - " +
+            day.moments.length +
+            " moments, " +
+            shotCount +
+            " captures from " +
+            day.cameras.length +
+            (day.cameras.length === 1 ? " camera" : " cameras");
+
+          /* Rewire the lightbox index after the DOM exists, since the
+           * anchors were created before their parents. */
+          Array.prototype.forEach.call(
+            host.querySelectorAll(".gallery-tile"),
+            function (node) {
+              node.addEventListener("click", function (event) {
+                if (typeof lightbox.showModal !== "function") return;
+                event.preventDefault();
+                showLightbox(Number(node.getAttribute("data-index")));
+              });
+            },
+          );
+        }
+
+        /* ---- data ---------------------------------------------------------- */
+
+        var days = [];
+        var selectedDate = null;
+        var dayCache = Object.create(null);
+
+        function currentDate() {
+          /* A day in the URL wins so an operator can bookmark or share the
+           * moment they are looking at. The parameter is re-validated
+           * client-side against the fetched list before it is used, so a
+           * hand-edited ?date= cannot make the page request anything the
+           * server would not have served anyway. */
+          var requested = new URLSearchParams(location.search).get("date");
+          if (requested && days.some(function (d) { return d.date === requested; })) {
+            return requested;
+          }
+          if (selectedDate) return selectedDate;
+          return days.length ? days[0].date : null;
+        }
+
+        function fillPicker() {
+          if (!days.length) {
+            picker.replaceChildren(
+              witsaba.el("option", { text: "No days captured yet" }),
+            );
+            picker.disabled = true;
+            return;
+          }
+
+          picker.disabled = false;
+          picker.replaceChildren.apply(
+            picker,
+            days.map(function (day) {
+              var cameras =
+                day.cameras === 1 ? "1 camera" : day.cameras + " cameras";
+              return witsaba.el("option", {
+                value: day.date,
+                text: day.date + "  (" + day.shots + " shots, " + cameras + ")",
+              });
+            }),
+          );
+
+          var chosen = currentDate();
+          if (chosen) picker.value = chosen;
+        }
+
+        function loadDay(date) {
+          return witsaba
+            .api("/api/gallery/day?date=" + encodeURIComponent(date), {
+              timeoutMs: 8000,
+            })
+            .then(function (day) {
+              dayCache[date] = day;
+              return day;
+            });
+        }
+
+        function showDay(date) {
+          selectedDate = date;
+          if (picker.value !== date) picker.value = date;
+
+          /* Keep the URL in step so a reload or a shared link returns to
+           * the same day. replaceState, not assignment, so the entry is
+           * not pushed onto the back stack for every pick. */
+          try {
+            var url = new URL(location.href);
+            url.searchParams.set("date", date);
+            history.replaceState(null, "", url);
+          } catch (e) {
+            /* file:// has no usable history API; the page still works. */
+          }
+
+          var cached = dayCache[date];
+          if (cached) {
+            renderDay(cached);
+            lastUpdated.textContent =
+              "updated " + new Date().toLocaleTimeString();
+            return Promise.resolve();
+          }
+
+          witsaba.showState(host, "empty", "Loading " + date + "\u2026", "");
+          return loadDay(date).then(renderDay);
+        }
+
+        function refresh() {
+          return witsaba
+            .api("/api/gallery/days", { timeoutMs: 8000 })
+            .then(function (list) {
+              if (!Array.isArray(list)) {
+                throw new Error("API returned a non-array payload");
+              }
+
+              days = list;
+              fillPicker();
+
+              if (!days.length) {
+                witsaba.showState(
+                  host,
+                  "empty",
+                  "No captures yet",
+                  "The capture job writes to the capture root every interval. Nothing has been archived so far, so there is nothing to browse.",
+                );
+                witsaba.setStatus(chip, "neutral", "no captures", false);
+                subtitle.textContent = "no captures";
+                summary.textContent = "Choose a day to browse.";
+                lastUpdated.textContent =
+                  "checked " + new Date().toLocaleTimeString();
+                return;
+              }
+
+              var chosen = currentDate();
+              return showDay(chosen).then(function () {
+                lastUpdated.textContent =
+                  "updated " + new Date().toLocaleTimeString();
+              });
+            })
+            .catch(function (err) {
+              witsaba.showState(
+                host,
+                "error",
+                "Cannot reach the API",
+                "The stack may be starting, or messaging-core is not running. This page retries automatically.",
+                err.message,
+              );
+              witsaba.setStatus(chip, "error", "api unreachable", true);
+              subtitle.textContent = "api offline";
+              lastUpdated.textContent =
+                "last attempt " + new Date().toLocaleTimeString();
+            });
+        }
+
+        picker.addEventListener("change", function () {
+          showDay(picker.value);
+        });
+
+        /* An archive changes slowly, so once a minute is plenty. The point
+         * of polling at all is that a new day folder appears at midnight
+         * local time and should show up without a manual reload. */
+        witsaba.onVisible(refresh, 60000);
+      })();
+    </script>
+  </body>
+</html>

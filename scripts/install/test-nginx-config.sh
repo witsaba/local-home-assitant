@@ -46,7 +46,7 @@ if [ ! -d "$NGINX_HTML" ]; then
     bad "document root missing: $NGINX_HTML"
 else
     for required in \
-        index.html devices.html favicon.svg \
+        index.html devices.html stream.html gallery.html favicon.svg \
         assets/app.css assets/app.js \
         50x.html
     do
@@ -170,6 +170,34 @@ else
     else
         bad "html caching not disabled"
     fi
+
+    # Every page shell gets its own no-store rule. gallery.html is included
+    # because a stale gallery shell is the same deploy hazard as a stale
+    # index.html, and because the page is new enough that forgetting the rule
+    # would not show up in any existing check.
+    for shell in index.html devices.html stream.html gallery.html; do
+        if grep -qE "location = /$shell\s*\\{" "$NGINX_CONF" \
+            && awk -v s="location = /$shell {" '
+                $0 ~ s { found = 1 }
+                found && /no-store/ { ok = 1; exit }
+                found && /^        }/ { exit }
+                END { exit(ok ? 0 : 1) }
+            ' "$NGINX_CONF"; then
+            ok "$shell is served no-store"
+        else
+            bad "$shell has no no-store rule"
+        fi
+    done
+
+    # The gallery page must NOT need an exact-match block. If one is ever
+    # added, it means someone confused it with /stream, which does need one
+    # because it is the stem of the /stream/ proxy prefix. Harmless but
+    # misleading, so it is asserted against.
+    if grep -qE '^\s*location = /gallery\s*\{' "$NGINX_CONF"; then
+        bad "location = /gallery exists; /gallery needs no exact match (see the /stream comment)"
+    else
+        ok "no spurious 'location = /gallery'"
+    fi
 fi
 
 # -----------------------------------------------------------------------------
@@ -269,6 +297,64 @@ else
         301) bad "/stream/<mac> redirected; the exact-match block is too broad" ;;
         *) bad "/stream/<mac> returned $sock, expected the gateway's own status" ;;
     esac
+
+    # Adding a page must not have broken the page that already worked. The
+    # gallery page is reachable at the clean URL through the catch-all
+    # try_files, with no exact-match block of its own.
+    gallery_clean=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 \
+        "http://127.0.0.1:$LISTEN_PORT/gallery")
+    gallery_explicit=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 \
+        "http://127.0.0.1:$LISTEN_PORT/gallery.html")
+    if [ "$gallery_clean" = "200" ] && [ "$gallery_explicit" = "200" ]; then
+        ok "both /gallery and /gallery.html resolve (HTTP 200)"
+    else
+        bad "clean URL returned $gallery_clean, explicit returned $gallery_explicit"
+    fi
+
+    body=$(curl -s --max-time 5 "http://127.0.0.1:$LISTEN_PORT/gallery")
+    case "$body" in
+        *"Gallery"*) ok "GET /gallery serves the archive page" ;;
+        *) bad "GET /gallery did not return the gallery page" ;;
+    esac
+
+    # Every nav link the gallery page renders must resolve, or the page ships
+    # a dead link on all four pages.
+    for page in / /devices /stream /gallery; do
+        code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 \
+            "http://127.0.0.1:$LISTEN_PORT$page")
+        if [ "$code" = "200" ]; then
+            ok "nav target $page returns 200"
+        else
+            bad "nav target $page returned $code"
+        fi
+    done
+
+    # The gallery's own index endpoint, through the same-origin proxy.
+    gdays=$(curl -s -o /tmp/witsaba-gallery-days.json -w '%{http_code}' --max-time 6 \
+        "http://127.0.0.1:$LISTEN_PORT/api/gallery/days")
+    if [ "$gdays" = "200" ]; then
+        ok "/api/gallery/days proxied to messaging-core (HTTP 200)"
+        # An empty archive is [] and a populated one is a JSON array too, so
+        # the leading bracket is the assertion that matters: the page requires
+        # an array and renders an empty state for [].
+        if head -c 1 /tmp/witsaba-gallery-days.json | grep -q '\['; then
+            ok "gallery days payload is a JSON array, as the page requires"
+        else
+            bad "gallery days payload is not a JSON array: $(head -c 80 /tmp/witsaba-gallery-days.json)"
+        fi
+    else
+        bad "/api/gallery/days returned HTTP $gdays (is messaging-core running?)"
+    fi
+
+    # A malformed date must be refused by the backend, not served as a
+    # directory listing. This is the traversal guard on the gallery.
+    gbad=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 \
+        "http://127.0.0.1:$LISTEN_PORT/api/gallery/day?date=../../etc")
+    if [ "$gbad" = "400" ]; then
+        ok "malformed gallery date rejected with 400 (HTTP $gbad)"
+    else
+        bad "malformed gallery date returned $gbad, expected 400"
+    fi
 fi
 
 echo ""

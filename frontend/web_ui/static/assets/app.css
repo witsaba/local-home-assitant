@@ -823,3 +823,239 @@ a:hover { color: var(--color-accent-hover); }
   gap: var(--space-3);
   flex-wrap: wrap;
 }
+
+/* ---- gallery -------------------------------------------------------------- */
+/* Archive browser for the periodic surveillance captures (added with
+   /gallery). The page renders one row group per capture tick, because a
+   moment is the unit the eye actually wants: "what did the three cameras
+   see at 14:30". Flattening 288 frames of one day into a single
+   undifferentiated grid loses that entirely. */
+
+.gallery-controls {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+/* Reuses the stream picker look so the two pages' controls match. */
+.gallery-controls .stream-picker { flex: 1 1 220px; }
+
+.gallery-summary {
+  margin: 0;
+  color: var(--color-fg-muted);
+  font-size: var(--text-sm);
+}
+
+/* One capture tick. Moment groups are separated by whitespace and a
+   rule rather than boxed individually: a day is 96 of them at the 15
+   minute default, and nesting 96 bordered cards in a panel makes the
+   day harder to scan, not easier. */
+.gallery-moment {
+  border-bottom: 1px solid var(--color-border);
+  padding: var(--space-4);
+}
+
+.gallery-moment:last-child { border-bottom: 0; }
+
+.gallery-moment__head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+}
+
+.gallery-moment__time {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  color: var(--color-fg);
+}
+
+.gallery-moment__count {
+  color: var(--color-fg-subtle);
+  font-size: var(--text-xs);
+}
+
+.gallery-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--space-3);
+}
+
+.gallery-tile {
+  display: block;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  text-decoration: none;
+  color: inherit;
+  box-shadow: var(--shadow-sm);
+  cursor: zoom-in;
+}
+
+.gallery-tile:hover {
+  background: var(--color-surface-hover);
+  border-color: var(--color-border-strong);
+  text-decoration: none;
+}
+
+.gallery-tile__stage {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  background: var(--color-bg);
+}
+
+/* The thumbnail is generated on demand at w=320, so the natural size is
+   already close to the rendered size and object-fit:cover costs nothing.
+   contain is preferred over cover because the capture and the tile share
+   the chip's 4:3 framing; cover would crop the tile edge on a narrow
+   phone. */
+.gallery-tile__image {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+  background: var(--color-bg);
+}
+
+/* Shown when the thumbnail request fails: a 503 means the newest frame
+   was still being written when the day was read. */
+.gallery-tile__fallback {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  padding: var(--space-5);
+  color: var(--color-fg-muted);
+  display: none;
+}
+
+.gallery-tile--broken .gallery-tile__image { display: none; }
+.gallery-tile--broken .gallery-tile__fallback { display: block; }
+
+.gallery-tile__label {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-top: 1px solid var(--color-border);
+  font-size: var(--text-xs);
+}
+
+.gallery-tile__name {
+  font-weight: var(--weight-medium);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The MAC is the only thing guaranteed to be present for an archived
+   frame, because the camera's name comes from the live device table. */
+.gallery-tile__mac {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  color: var(--color-fg-subtle);
+  flex: none;
+}
+
+/* ---- gallery lightbox ----------------------------------------------------- */
+/* <dialog> is used rather than a bespoke overlay so focus trapping,
+   inert background content, and Escape-to-close all come from the
+   platform instead of from hand-written state. */
+
+.gallery-lightbox {
+  border: none;
+  padding: 0;
+  background: transparent;
+  max-width: min(96vw, 1200px);
+  max-height: 96vh;
+  overflow: visible;
+}
+
+.gallery-lightbox::backdrop { background: rgba(8, 10, 13, 0.88); }
+
+.gallery-lightbox__figure {
+  margin: 0;
+  background: var(--color-surface);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.gallery-lightbox__img {
+  display: block;
+  width: 100%;
+  max-height: 78vh;
+  object-fit: contain;
+  background: #000;
+}
+
+.gallery-lightbox__caption {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  font-size: var(--text-sm);
+  color: var(--color-fg-muted);
+}
+
+.gallery-lightbox__close {
+  min-width: 44px;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-2);
+  background: var(--color-surface);
+  color: var(--color-fg);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+}
+
+.gallery-lightbox__close:hover { background: var(--color-surface-hover); }
+
+/* Previous/next sit outside the figure so they never cover the frame. */
+.gallery-lightbox__nav {
+  position: fixed;
+  top: 50%;
+  transform: translateY(-50%);
+  min-width: 44px;
+  min-height: 44px;
+  padding: var(--space-3);
+  background: var(--color-surface);
+  color: var(--color-fg);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  line-height: 1;
+  font-size: var(--text-md);
+}
+
+.gallery-lightbox__nav:hover { background: var(--color-surface-hover); }
+.gallery-lightbox__nav--prev { left: max(var(--space-2), calc(50vw - 50% + var(--space-2))); }
+.gallery-lightbox__nav--next { right: max(var(--space-2), calc(50vw - 50% + var(--space-2))); }
+
+/* Hidden rather than removed when a moment has a single frame, so the
+   caption row does not reflow as the operator arrows through a day. */
+.gallery-lightbox__nav[hidden] { display: none; }
+
+/* ---- responsive ----------------------------------------------------------- */
+@media (max-width: 640px) {
+  /* One column: a 320px thumbnail next to another is not worth the
+     horizontal scroll on a phone. */
+  .gallery-grid { grid-template-columns: 1fr; }
+  .gallery-lightbox__img { max-height: 62vh; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gallery-lightbox,
+  .gallery-lightbox__img { transition: none; }
+}

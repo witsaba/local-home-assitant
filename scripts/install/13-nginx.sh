@@ -250,6 +250,20 @@ cat << CONF_MID
             add_header Cache-Control "no-store, no-cache, must-revalidate";
         }
 
+        # gallery.html, same reasoning. It ships with the archive browser and
+        # references app.css/app.js, so a cached shell can outlive the assets
+        # it was built against.
+        #
+        # Note there is deliberately NO `location = /gallery` block. /stream
+        # needs an exact match only because it is the stem of the
+        # `location /stream/` proxy prefix and nginx 301s a prefix stem to its
+        # slash form before try_files runs. Nothing claims the /gallery prefix,
+        # so /gallery resolves through the catch-all try_files to gallery.html
+        # on its own. Adding an exact block here would be cargo cult.
+        location = /gallery.html {
+            add_header Cache-Control "no-store, no-cache, must-revalidate";
+        }
+
         location / {
             # Clean URLs: /devices must resolve to devices.html on disk.
             # '\$uri \$uri/' alone returns 404, because the file has the
