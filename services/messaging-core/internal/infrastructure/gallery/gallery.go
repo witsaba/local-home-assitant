@@ -387,6 +387,12 @@ func ImageURL(date, tick, mac string) string {
 }
 
 // ThumbURL is the API path of one thumbnail.
+//
+// The width is a requested longest edge, not a contract: the server may
+// return a smaller image when re-encoding cannot reach it exactly, so a
+// client must treat the result as a hint rather than a guarantee. The
+// server is the only thing that decides the final size, which is what keeps
+// an arbitrary caller from selecting an expensive encode.
 func ThumbURL(date, tick, mac string, width int) string {
 	return "/api/gallery/thumb?date=" + date + "&t=" + tick + "&mac=" + mac + "&w=" + strconv.Itoa(width)
 }
