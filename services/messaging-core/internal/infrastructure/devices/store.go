@@ -85,6 +85,57 @@ func (p *Pgx) GetByMAC(ctx context.Context, mac string) (*Device, error) {
 	return &dev, nil
 }
 
+// listAllSQL fetches every device ever discovered, in ascending MAC order.
+//
+// Ascending MAC (not last_seen_at) is the sort order because it is stable
+// across calls: the set of rows changes, but any two rows that both exist
+// always come back in the same relative order. That keeps a gallery day's
+// camera list from reshuffling between requests.
+//
+// host(last_source_ip) extracts the IP as text; the column is nullable so
+// the scan target is a *string.
+const listAllSQL = `
+SELECT
+    mac,
+    COALESCE(name, ''),
+    COALESCE(fw, ''),
+    COALESCE(chip, ''),
+    host(last_source_ip),
+    last_seen_at
+FROM witsaba.devices
+ORDER BY mac ASC
+`
+
+// ListAll returns every row in witsaba.devices, ascending by MAC,
+// regardless of last-seen age. See DeviceRepository.ListAll for why the
+// gallery needs this rather than ListActive.
+//
+// Returns an empty slice and nil error when the table is empty.
+func (p *Pgx) ListAll(ctx context.Context) ([]*Device, error) {
+	rows, err := p.q.Query(ctx, listAllSQL)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var devs []*Device
+	for rows.Next() {
+		var d Device
+		var ipStr *string
+		if err := rows.Scan(&d.MAC, &d.Name, &d.FW, &d.Chip, &ipStr, &d.LastSeenAt); err != nil {
+			return nil, err
+		}
+		if ipStr != nil {
+			d.LastSourceIP = net.ParseIP(*ipStr)
+		}
+		devs = append(devs, &d)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return devs, nil
+}
+
 // listActiveSQL fetches all devices seen within maxAge. host(last_source_ip)
 // extracts the IP as text; $1 is formatted as an interval (e.g. "60s").
 const listActiveSQL = `

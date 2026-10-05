@@ -8,6 +8,7 @@ import (
 
 	"github.com/witsaba/local-home-assitant/services/messaging-core/internal/application/ports"
 	"github.com/witsaba/local-home-assitant/services/messaging-core/internal/infrastructure/devices"
+	"github.com/witsaba/local-home-assistant/services/messaging-core/internal/infrastructure/gallery"
 )
 
 // maxActiveAge is the default lookback window for active devices.
@@ -37,15 +38,23 @@ const defaultDiscoveryInterval = time.Minute
 // Handler serves the messaging-core HTTP REST API.
 type Handler struct {
 	repo  devices.DeviceRepository
+	store *gallery.Store
 	log   ports.Logger
 	mux   *http.ServeMux
 }
 
 // NewHandler returns a Handler wired with the given DeviceRepository.
-func NewHandler(repo devices.DeviceRepository, log ports.Logger) *Handler {
-	h := &Handler{repo: repo, log: log}
+//
+// store is the capture archive. It may be nil, in which case the gallery
+// routes answer 503: a deployment with no capture root configured is a
+// configuration gap to report, not a reason to fail the whole API, and the
+// device list must keep working either way.
+func NewHandler(repo devices.DeviceRepository, store *gallery.Store, log ports.Logger) *Handler {
+	h := &Handler{repo: repo, store: store, log: log}
 	h.mux = http.NewServeMux()
 	h.mux.HandleFunc("GET /api/devices/active", h.listActive)
+	h.mux.HandleFunc("GET /api/gallery/days", h.galleryDays)
+	h.mux.HandleFunc("GET /api/gallery/day", h.galleryDay)
 	return h
 }
 
@@ -98,4 +107,120 @@ func (h *Handler) listActive(w http.ResponseWriter, r *http.Request) {
 			ports.Field{Key: "err", Value: err.Error()},
 		)
 	}
+}
+
+// galleryUnavailable reports whether the gallery routes can serve a request.
+//
+// A nil store means no capture root was configured at startup. That is a
+// deployment gap, so it is reported as 503 with a reason a human can act on
+// rather than as a 500, and the device routes keep working.
+func (h *Handler) galleryUnavailable(w http.ResponseWriter, route string) bool {
+	if h.store == nil {
+		h.log.Warn("gallery request with no capture store configured",
+			ports.Field{Key: "route", Value: route},
+		)
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+			"error": "gallery is not configured on this server",
+		})
+		return true
+	}
+	return false
+}
+
+// writeJSON writes a JSON body with the given status code.
+func writeJSON(w http.ResponseWriter, code int, body any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	_ = json.NewEncoder(w).Encode(body)
+}
+
+// galleryDays handles GET /api/gallery/days. It returns every day folder in
+// the capture archive, newest first, and drives the date picker. The JSON
+// shape is owned by the gallery package, not restated here.
+func (h *Handler) galleryDays(w http.ResponseWriter, r *http.Request) {
+	if h.galleryUnavailable(w, "GET /api/gallery/days") {
+		return
+	}
+
+	days, err := h.store.ListDays()
+	if err != nil {
+		h.log.Error("GET /api/gallery/days: ListDays failed",
+			ports.Field{Key: "err", Value: err.Error()},
+		)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{
+			"error": "could not read the capture archive",
+		})
+		return
+	}
+
+	// A missing root yields an empty slice from the store, but never a nil
+	// one, so this encodes [] rather than null.
+	writeJSON(w, http.StatusOK, days)
+}
+
+// galleryDay handles GET /api/gallery/day?date=YYYY-MM-DD.
+//
+// The date is validated before any path is built, and an invalid one is a
+// 400 rather than a 404: the client sent something malformed, and telling it
+// "not found" would send it looking for a day that never existed.
+func (h *Handler) galleryDay(w http.ResponseWriter, r *http.Request) {
+	if h.galleryUnavailable(w, "GET /api/gallery/day") {
+		return
+	}
+
+	date := r.URL.Query().Get("date")
+	if err := gallery.ValidateDate(date); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": err.Error(),
+		})
+		return
+	}
+
+	names, err := h.cameraNames(r)
+	if err != nil {
+		h.log.Error("GET /api/gallery/day: ListAll failed",
+			ports.Field{Key: "date", Value: date},
+			ports.Field{Key: "err", Value: err.Error()},
+		)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{
+			"error": "could not resolve camera names",
+		})
+		return
+	}
+
+	day, err := h.store.Day(date, names)
+	if err != nil {
+		// ValidateDate already ran, so any error here is a filesystem
+		// fault or the response size cap, both of which are server-side.
+		h.log.Error("GET /api/gallery/day: Day failed",
+			ports.Field{Key: "date", Value: date},
+			ports.Field{Key: "err", Value: err.Error()},
+		)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{
+			"error": "could not read that day",
+		})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, day)
+}
+
+// cameraNames maps MAC to display name for every device the stack has ever
+// seen.
+//
+// ListAll is used rather than ListActive on purpose: ListActive drops a
+// camera once it has been unseen for maxActiveAge, so a gallery day from
+// last week would come back as bare MACs for anything currently offline.
+// A MAC with no row keeps an empty name and the page falls back to the MAC;
+// the API never invents a name for a capture.
+func (h *Handler) cameraNames(r *http.Request) (map[string]string, error) {
+	devs, err := h.repo.ListAll(r.Context())
+	if err != nil {
+		return nil, err
+	}
+	names := make(map[string]string, len(devs))
+	for _, d := range devs {
+		names[d.MAC] = d.Name
+	}
+	return names, nil
 }

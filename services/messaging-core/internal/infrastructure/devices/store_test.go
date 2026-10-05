@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -115,9 +116,18 @@ type fakeQuerier struct {
 
 	// For ListActive: pre-built fakeRows
 	listActiveRows *fakeRows
+
+	// For ListAll: pre-built fakeRows
+	listAllRows *fakeRows
+
+	// lastSQL records the SQL of the most recent Query/QueryRow call so
+	// tests can assert on clauses the fake does not otherwise enforce
+	// (e.g. the ORDER BY that the interface promises).
+	lastSQL string
 }
 
-func (f *fakeQuerier) QueryRow(_ context.Context, _ string, _ ...any) pgx.Row {
+func (f *fakeQuerier) QueryRow(_ context.Context, sql string, _ ...any) pgx.Row {
+	f.lastSQL = sql
 	if f.noRows {
 		return &pgxNoRowsRow{}
 	}
@@ -129,8 +139,14 @@ func (f *fakeQuerier) QueryRow(_ context.Context, _ string, _ ...any) pgx.Row {
 	return &r
 }
 
-func (f *fakeQuerier) Query(_ context.Context, _ string, _ ...any) (pgx.Rows, error) {
-	if f.listActiveRows != nil {
+func (f *fakeQuerier) Query(_ context.Context, sql string, _ ...any) (pgx.Rows, error) {
+	f.lastSQL = sql
+	switch {
+	case f.listAllRows != nil:
+		f.listAllRows.pos = 0
+		f.listAllRows.closed = false
+		return f.listAllRows, nil
+	case f.listActiveRows != nil:
 		f.listActiveRows.pos = 0
 		f.listActiveRows.closed = false
 		return f.listActiveRows, nil
@@ -316,5 +332,89 @@ func TestPgxListActive_NegativeMaxAge(t *testing.T) {
 	_, err := repo.ListActive(context.Background(), -30*time.Second)
 	if err == nil {
 		t.Fatal("expected error for negative maxAge, got nil")
+	}
+}
+
+func TestPgxListAll_Success(t *testing.T) {
+	// last_seen_at deliberately far in the past: ListAll must ignore
+	// freshness entirely, which is the entire point of the method.
+	old := time.Now().Add(-30 * 24 * time.Hour)
+	q := &fakeQuerier{
+		listAllRows: &fakeRows{
+			rows: []querierRow6{
+				{mac: "d4e9f48d381c", name: "garage-cam", fw: "0.2.0", chip: "esp32s3", ip: "192.168.1.101", lastSeen: old},
+				{mac: "e08cfe3091b0", name: "kitchen-cam", fw: "0.1.0", chip: "esp32cam", ip: "192.168.1.100", lastSeen: old},
+			},
+		},
+	}
+	repo := NewPgx(q)
+
+	devs, err := repo.ListAll(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(devs) != 2 {
+		t.Fatalf("len(devs): got %d, want 2", len(devs))
+	}
+	if devs[0].MAC != "d4e9f48d381c" || devs[1].MAC != "e08cfe3091b0" {
+		t.Errorf("MACs: got [%s %s], want [d4e9f48d381c e08cfe3091b0]", devs[0].MAC, devs[1].MAC)
+	}
+	if devs[0].Name != "garage-cam" {
+		t.Errorf("devs[0].Name: got %q, want %q", devs[0].Name, "garage-cam")
+	}
+	if !devs[0].LastSourceIP.Equal(net.ParseIP("192.168.1.101")) {
+		t.Errorf("devs[0].LastSourceIP: got %v, want %v", devs[0].LastSourceIP, net.ParseIP("192.168.1.101"))
+	}
+}
+
+// TestPgxListAll_OrdersByMAC pins the sort order the interface promises.
+// The fake cannot enforce ORDER BY, so the clause is asserted on the SQL.
+func TestPgxListAll_OrdersByMAC(t *testing.T) {
+	q := &fakeQuerier{listAllRows: &fakeRows{}}
+	repo := NewPgx(q)
+
+	if _, err := repo.ListAll(context.Background()); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(q.lastSQL, "ORDER BY mac") {
+		t.Errorf("ListAll SQL must order by mac for a stable camera list, got: %s", q.lastSQL)
+	}
+}
+
+func TestPgxListAll_Empty(t *testing.T) {
+	q := &fakeQuerier{listAllRows: &fakeRows{rows: nil}}
+	repo := NewPgx(q)
+
+	devs, err := repo.ListAll(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(devs) != 0 {
+		t.Fatalf("len(devs): got %d, want 0 (empty result)", len(devs))
+	}
+}
+
+func TestPgxListAll_NullIP(t *testing.T) {
+	q := &fakeQuerier{
+		listAllRows: &fakeRows{
+			rows: []querierRow6{
+				{mac: "abc123", name: "no-ip-cam", fw: "0.1.0", chip: "esp32", ip: "", lastSeen: time.Now()},
+			},
+		},
+	}
+	repo := NewPgx(q)
+
+	devs, err := repo.ListAll(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(devs) != 1 {
+		t.Fatalf("len(devs): got %d, want 1", len(devs))
+	}
+	if devs[0].LastSourceIP != nil {
+		t.Errorf("devs[0].LastSourceIP: got %v, want nil", devs[0].LastSourceIP)
+	}
+	if devs[0].Name != "no-ip-cam" {
+		t.Errorf("devs[0].Name: got %q, want %q (a known device with no IP keeps its name)", devs[0].Name, "no-ip-cam")
 	}
 }

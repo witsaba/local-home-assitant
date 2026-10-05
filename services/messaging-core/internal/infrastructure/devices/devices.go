@@ -38,4 +38,18 @@ type DeviceRepository interface {
 	// maxAge is a time.Duration (e.g. 60*time.Second for 60 seconds).
 	// Returns an empty slice and nil error when no devices match.
 	ListActive(ctx context.Context, maxAge time.Duration) ([]*Device, error)
+
+	// ListAll returns every row in witsaba.devices, in ascending MAC
+	// order, regardless of how long ago the device was last seen.
+	//
+	// ListActive is the wrong tool for anything that reads history:
+	// it drops a device once it has been unseen for maxAge, so a
+	// gallery page rendering an archived day would show bare MACs
+	// for any camera that is currently offline. witsaba.devices keeps
+	// rows forever -- first_seen_at is preserved across upserts -- so
+	// this returns the full set of devices the stack has ever seen.
+	// On a home LAN that is a handful of rows.
+	//
+	// Returns an empty slice and nil error when the table is empty.
+	ListAll(ctx context.Context) ([]*Device, error)
 }
