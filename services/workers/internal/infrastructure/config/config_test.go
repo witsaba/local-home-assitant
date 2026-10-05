@@ -262,6 +262,10 @@ func TestLoad_SurveillanceDefaults(t *testing.T) {
 		t.Errorf("SurveillanceDeviceFreshnessMinutes = %d, want 5",
 			cfg.SurveillanceDeviceFreshnessMinutes)
 	}
+	if cfg.SurveillanceRetentionDays != 30 {
+		t.Errorf("SurveillanceRetentionDays = %d, want 30",
+			cfg.SurveillanceRetentionDays)
+	}
 	if cfg.SurveillanceRootDir == "" {
 		t.Errorf("SurveillanceRootDir = empty, want non-empty default")
 	}
@@ -349,5 +353,41 @@ func TestLoad_EmptySurveillanceRootDir(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "SURVEILLANCE_ROOT_DIR") {
 		t.Errorf("Err = %q, want contains 'SURVEILLANCE_ROOT_DIR'", err)
+	}
+}
+
+// TestLoad_SurveillanceRetentionOverride pins the one knob that decides
+// whether the archive is ever deleted, including the explicit "keep
+// everything" case.
+func TestLoad_SurveillanceRetentionOverride(t *testing.T) {
+	cases := []struct {
+		env  string
+		want int
+	}{
+		{"7", 7},
+		{"0", 0}, // explicit opt-out: keep everything
+		{"365", 365},
+	}
+	for _, c := range cases {
+		resetEnv(t)
+		t.Setenv("SURVEILLANCE_RETENTION_DAYS", c.env)
+		cfg, err := config.Load()
+		if err != nil {
+			t.Fatalf("SURVEILLANCE_RETENTION_DAYS=%s: %v", c.env, err)
+		}
+		if cfg.SurveillanceRetentionDays != c.want {
+			t.Errorf("SURVEILLANCE_RETENTION_DAYS=%s: got %d, want %d",
+				c.env, cfg.SurveillanceRetentionDays, c.want)
+		}
+	}
+}
+
+// TestLoad_SurveillanceRetentionRejectsNegative guards the one value that
+// is a typo rather than an intent.
+func TestLoad_SurveillanceRetentionRejectsNegative(t *testing.T) {
+	resetEnv(t)
+	t.Setenv("SURVEILLANCE_RETENTION_DAYS", "-1")
+	if _, err := config.Load(); err == nil {
+		t.Error("got nil error for a negative retention window, want a rejection")
 	}
 }

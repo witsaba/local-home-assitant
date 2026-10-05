@@ -64,6 +64,7 @@ func newTestJob(t *testing.T, repo devices.Repository, clock Clock, client *http
 		root,
 		repo,
 		zap.NewNop(),
+		0, // retention disabled: the tick tests are not about pruning
 	)
 	if client != nil {
 		j.SetHTTPClient(client)
@@ -319,7 +320,7 @@ func TestJob_Run_ContextCancelledMidTick(t *testing.T) {
 func TestJob_Defaults(t *testing.T) {
 	t.Parallel()
 
-	j := NewJob(0, 0, 0, "/tmp", &fakeDevicesRepo{}, zap.NewNop())
+	j := NewJob(0, 0, 0, "/tmp", &fakeDevicesRepo{}, zap.NewNop(), 0)
 	if j.Interval() != 15*time.Minute {
 		t.Errorf("Interval() = %v, want 15m", j.Interval())
 	}

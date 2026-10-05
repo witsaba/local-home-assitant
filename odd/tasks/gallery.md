@@ -138,11 +138,11 @@ change, so the gallery is usable before retention lands.
   Commits `e995c59` (unverified) then `4bae310` (verified: `go build ./...`,
   `go vet ./...`, `go test -race ./...` all pass, no gofmt drift).
 
-- [ ] **U2** — `GET /api/gallery/img` with ETag / Last-Modified / 304 and the
+- [x] **U2** — `GET /api/gallery/img` with ETag / Last-Modified / 304 and the
   truncated-frame guard.
-- [ ] **U3** — `GET /api/gallery/thumb` with the atomic `.thumbs` cache, the
+- [x] **U3** — `GET /api/gallery/thumb` with the atomic `.thumbs` cache, the
   source size cap and the decode semaphore; the systemd write-path change.
-- [ ] **U4** — `SURVEILLANCE_RETENTION_DAYS` in the worker with the
+- [x] **U4** — `SURVEILLANCE_RETENTION_DAYS` in the worker with the
   `Lstat`-verified day-folder prune, plus the `SURVEILLANCE_*` block in
   `env.example` (currently missing entirely).
 - [ ] **U5** — `frontend/web_ui/static/gallery.html`, nav link in the three
@@ -212,4 +212,3 @@ and rewrite the import prefix from it.
 
 Corrected on disk. The Go toolchain, `GOCACHE`, `GOMODCACHE`, vendor and
 `GODEBUG=goindex=0` were all innocent. No reinstall is needed.
-

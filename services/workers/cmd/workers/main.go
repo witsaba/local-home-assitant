@@ -139,6 +139,7 @@ func run() int {
 		cfg.SurveillanceRootDir,
 		repo,
 		log,
+		cfg.SurveillanceRetentionDays,
 	)
 
 	scheduler := worker.New([]worker.Job{discoveryJob, surveillanceJob}, emit, log)

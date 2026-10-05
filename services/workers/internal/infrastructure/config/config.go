@@ -26,6 +26,15 @@ type Config struct {
 	SurveillanceDeviceFreshnessMinutes int
 	SurveillanceRootDir                string
 
+	// SurveillanceRetentionDays is how many days of captures to
+	// keep on disk. Zero or negative disables pruning. Default 30.
+	//
+	// The job is append-only, so without this the archive grows
+	// without bound: about 6.7 MB a day for three cameras at the 15
+	// minute default, which is roughly 2.45 GB a year on a device
+	// with 1 GB of RAM.
+	SurveillanceRetentionDays int
+
 	// Logging.
 	LogLevel string
 
@@ -60,6 +69,7 @@ func Load() (*Config, error) {
 		SurveillanceCaptureTimeoutSeconds:  envInt("SURVEILLANCE_CAPTURE_TIMEOUT_SECONDS", 10),
 		SurveillanceDeviceFreshnessMinutes: envInt("SURVEILLANCE_DEVICE_FRESHNESS_MINUTES", 5),
 		SurveillanceRootDir:                envStr("SURVEILLANCE_ROOT_DIR", defaultSurveillanceRootDir()),
+		SurveillanceRetentionDays:          envInt("SURVEILLANCE_RETENTION_DAYS", defaultSurveillanceRetentionDays()),
 
 		LogLevel: envStr("LOG_LEVEL", "info"),
 
@@ -146,8 +156,23 @@ func validate(cfg *Config) error {
 	if strings.TrimSpace(cfg.SurveillanceRootDir) == "" {
 		return fmt.Errorf("SURVEILLANCE_ROOT_DIR must be non-empty")
 	}
+	// Negative is allowed and means "never prune"; a value that is not a
+	// number at all has already been rejected by envInt, which falls back
+	// to the default on a parse failure. Rejecting negatives here would
+	// make it impossible to express "keep everything" without deleting the
+	// variable and relying on the default.
+	if cfg.SurveillanceRetentionDays < 0 {
+		return fmt.Errorf("SURVEILLANCE_RETENTION_DAYS must be >= 0, got %d",
+			cfg.SurveillanceRetentionDays)
+	}
 	return nil
 }
+
+// defaultSurveillanceRetentionDays returns the default retention window in
+// days. Thirty days keeps a month of history, which covers the realistic
+// "what did that camera see last Tuesday" case, while capping the archive at
+// roughly 200 MB for three cameras.
+func defaultSurveillanceRetentionDays() int { return 30 }
 
 // defaultSurveillanceRootDir returns "$HOME/.witsaba/cameras" or,
 // if HOME is unset, a path under os.UserHomeDir()'s fallback. We

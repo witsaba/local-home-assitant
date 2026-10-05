@@ -55,6 +55,10 @@ type Job struct {
 	// window is the flash time window. Default 17:45 → 05:45.
 	window Window
 
+	// retentionDays is how many days of captures to keep. Zero or
+	// negative disables pruning entirely. Default 30.
+	retentionDays int
+
 	// storage is the filesystem layer.
 	storage Storage
 
@@ -98,6 +102,7 @@ func NewJob(
 	rootDir string,
 	repo devices.Repository,
 	logger *zap.Logger,
+	retentionDays int,
 ) *Job {
 	if interval <= 0 {
 		interval = 15 * time.Minute
@@ -114,6 +119,7 @@ func NewJob(
 		freshness:      freshness,
 		captureTimeout: captureTimeout,
 		window:         NewWindow(),
+		retentionDays:  retentionDays,
 		storage:        NewStorage(rootDir),
 		repo:           repo,
 		httpClient:     newHTTPClient(captureTimeout),
@@ -149,6 +155,10 @@ func (j *Job) SetWindow(w Window) { j.window = w }
 // in unit tests that do not assert on log output.
 func (j *Job) SetLogger(l *zap.Logger) { j.logger = l }
 
+// SetRetentionDays replaces the retention window. Zero or negative
+// disables pruning. Test seam and the env-var wiring path.
+func (j *Job) SetRetentionDays(d int) { j.retentionDays = d }
+
 // Run implements worker.Job. One tick:
 //
 //   1. Read fresh devices from the repo (rows seen within
@@ -183,6 +193,23 @@ func (j *Job) Run(ctx context.Context, _ func(types.DiscoveryEvent)) error {
 		zap.Duration("freshness", j.freshness),
 		zap.String("root", j.storage.Root),
 	)
+
+	// Reclaim space before writing more of it. A prune failure is
+	// logged and ignored: retention is housekeeping, and letting it
+	// abort the tick would turn "disk is filling" into "cameras stop
+	// recording", which is a far worse outcome.
+	if res, err := j.storage.PruneOlderThan(now, j.retentionDays); err != nil {
+		j.logger.Warn("surveillance: retention prune failed",
+			zap.String("root", j.storage.Root),
+			zap.Int("retention_days", j.retentionDays),
+			zap.Error(err))
+	} else if res.Days > 0 {
+		j.logger.Info("surveillance: pruned old captures",
+			zap.Int("retention_days", j.retentionDays),
+			zap.Int("days_removed", res.Days),
+			zap.Int64("bytes_reclaimed", res.Bytes),
+			zap.Int("days_kept", res.Kept))
+	}
 
 	if j.repo == nil {
 		j.logger.Warn("surveillance: no repo configured; skipping tick")
