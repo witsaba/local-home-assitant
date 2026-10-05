@@ -22,6 +22,7 @@ import (
 	"github.com/witsaba/local-home-assitant/services/messaging-core/internal/infrastructure/config"
 	"github.com/witsaba/local-home-assitant/services/messaging-core/internal/infrastructure/db"
 	"github.com/witsaba/local-home-assitant/services/messaging-core/internal/infrastructure/devices"
+	"github.com/witsaba/local-home-assitant/services/messaging-core/internal/infrastructure/gallery"
 	loggerinfra "github.com/witsaba/local-home-assitant/services/messaging-core/internal/infrastructure/logger"
 	"github.com/witsaba/local-home-assitant/services/messaging-core/internal/infrastructure/natsserver"
 	"github.com/witsaba/local-home-assitant/services/messaging-core/internal/infrastructure/streamhub"
@@ -109,15 +110,15 @@ func run() int {
 
 	// — Postgres pool —
 	poolCfg := &db.PoolConfig{
-		Host:               cfg.PGHost,
-		Port:               cfg.PGPort,
-		Database:           cfg.PGDatabase,
-		User:               cfg.PGUser,
-		Password:           cfg.PGPassword,
-		MaxConns:           cfg.PGMaxConns,
-		MinConns:           cfg.PGMinConns,
-		MaxConnLifetime:    cfg.PGMaxConnLifetime,
-		MaxConnIdleTime:   cfg.PGMaxConnIdleTime,
+		Host:            cfg.PGHost,
+		Port:            cfg.PGPort,
+		Database:        cfg.PGDatabase,
+		User:            cfg.PGUser,
+		Password:        cfg.PGPassword,
+		MaxConns:        cfg.PGMaxConns,
+		MinConns:        cfg.PGMinConns,
+		MaxConnLifetime: cfg.PGMaxConnLifetime,
+		MaxConnIdleTime: cfg.PGMaxConnIdleTime,
 	}
 	if err := db.Open(poolCfg); err != nil {
 		log.Error("opening Postgres pool failed",
@@ -153,8 +154,13 @@ func run() int {
 	)
 	wsSrv.Start()
 
-	// — REST API server (GET /api/devices/active) —
-	apiHandler := api.NewHandler(devRepo, log)
+	// — REST API server (GET /api/devices/active, /api/gallery/*) —
+	//
+	// The gallery store is read-only over the capture root the workers
+	// service writes. A missing root is not fatal: it only means no
+	// captures exist yet, and the endpoints report an empty gallery.
+	galleryStore := gallery.NewStore(cfg.GalleryRootDir)
+	apiHandler := api.NewHandler(devRepo, galleryStore, log)
 	apiSrv := &http.Server{
 		Addr:    fmt.Sprintf(":%d", cfg.APIPort),
 		Handler: apiHandler,
@@ -169,6 +175,7 @@ func run() int {
 	}()
 	log.Info("API server started",
 		ports.Field{Key: "addr", Value: apiSrv.Addr},
+		ports.Field{Key: "gallery_root", Value: cfg.GalleryRootDir},
 	)
 
 	// — Block on SIGINT / SIGTERM —

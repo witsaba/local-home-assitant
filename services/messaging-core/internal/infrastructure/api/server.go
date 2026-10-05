@@ -8,7 +8,7 @@ import (
 
 	"github.com/witsaba/local-home-assitant/services/messaging-core/internal/application/ports"
 	"github.com/witsaba/local-home-assitant/services/messaging-core/internal/infrastructure/devices"
-	"github.com/witsaba/local-home-assistant/services/messaging-core/internal/infrastructure/gallery"
+	"github.com/witsaba/local-home-assitant/services/messaging-core/internal/infrastructure/gallery"
 )
 
 // maxActiveAge is the default lookback window for active devices.
@@ -20,7 +20,7 @@ import (
 // refresh lands and the API drops it. Measured on the Pi at 60s/60s, sampling
 // /api/devices/active every 5s:
 //
-//   0, 3, 3, 3, 3, 3, 3, 3, 1, 0, 2, 2, 2, 2, 2, 2, 2, 0, 3, ...
+//	0, 3, 3, 3, 3, 3, 3, 3, 1, 0, 2, 2, 2, 2, 2, 2, 2, 0, 3, ...
 //
 // The devices were present the entire time -- discovery reported all three
 // every cycle with upsert_ok=true. 3x the default interval absorbs one or two

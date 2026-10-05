@@ -88,7 +88,7 @@ func TestValidateMAC(t *testing.T) {
 		"d4e9f48d381",      // 11 chars
 		"d4e9f48d381cd",    // 13 chars
 		"d4-e9-f4-8d-38",   // colon-separated
-		"../../../etc",      // traversal attempt
+		"../../../etc",     // traversal attempt
 		"d4e9f48d381c.jpg", // extension smuggled in
 		"d4e9f48d381c;",    // shell metacharacter
 	}

@@ -102,12 +102,12 @@ func (f *fakeRows) Scan(dest ...any) error {
 func (f *fakeRows) Err() error { return f.scanErr }
 func (f *fakeRows) Close()     { f.closed = true }
 
-func (f *fakeRows) CommandTag() pgconn.CommandTag      { return pgconn.CommandTag{} }
+func (f *fakeRows) CommandTag() pgconn.CommandTag                { return pgconn.CommandTag{} }
 func (f *fakeRows) FieldDescriptions() []pgconn.FieldDescription { return nil }
-func (f *fakeRows) Values() ([]any, error)              { return nil, nil }
-func (f *fakeRows) RawValues() [][]byte                  { return nil }
-func (f *fakeRows) Conn() *pgx.Conn                      { return nil }
-func (f *fakeRows) TypeMap() *pgtype.Map                { return nil }
+func (f *fakeRows) Values() ([]any, error)                       { return nil, nil }
+func (f *fakeRows) RawValues() [][]byte                          { return nil }
+func (f *fakeRows) Conn() *pgx.Conn                              { return nil }
+func (f *fakeRows) TypeMap() *pgtype.Map                         { return nil }
 
 // fakeQuerier is a fake implementation of Querier for unit testing.
 type fakeQuerier struct {

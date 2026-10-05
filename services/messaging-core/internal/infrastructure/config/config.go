@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -15,9 +16,9 @@ import (
 // Defaults applied when the corresponding env var is unset or empty.
 const (
 	defaultHost       = "127.0.0.1"
-	defaultPort      = 4222
-	defaultLogLevel  = "info"
-	defaultDataDir   = ""
+	defaultPort       = 4222
+	defaultLogLevel   = "info"
+	defaultDataDir    = ""
 	defaultSTREAMPort = 8080
 	defaultAPIPort    = 8081
 )
@@ -45,6 +46,11 @@ type Config struct {
 	// Defaults to 8081.
 	APIPort int
 
+	// GalleryRootDir is the surveillance capture root written by the
+	// workers service, laid out as <root>/<YYYY-MM-DD>/<HH-MM-SS>_<mac>.jpg.
+	// Defaults to "$HOME/.witsaba/cameras".
+	GalleryRootDir string
+
 	// Postgres connection parameters.
 	PGHost            string
 	PGPort            int
@@ -68,6 +74,8 @@ func Load() (Config, error) {
 
 		STREAMPort: envInt("STREAM_PORT", defaultSTREAMPort),
 		APIPort:    envInt("API_PORT", defaultAPIPort),
+
+		GalleryRootDir: envStr("GALLERY_ROOT_DIR", defaultGalleryRootDir()),
 
 		// Postgres defaults — use MESSAGING_CORE_PG_* env vars.
 		PGHost:     envStr("MESSAGING_CORE_PG_HOST", "127.0.0.1"),
@@ -167,5 +175,28 @@ func validate(cfg Config) error {
 	if cfg.APIPort < 1 || cfg.APIPort > 65535 {
 		return fmt.Errorf("API_PORT: must be in [1, 65535], got %d", cfg.APIPort)
 	}
+	if strings.TrimSpace(cfg.GalleryRootDir) == "" {
+		return errors.New("GALLERY_ROOT_DIR: must not be empty")
+	}
 	return nil
+}
+
+// defaultGalleryRootDir mirrors the workers service's
+// SURVEILLANCE_ROOT_DIR default so both processes agree on the capture
+// root without extra configuration. HOME is resolved at config-load
+// time so a misconfigured HOME surfaces immediately rather than at the
+// first gallery request.
+//
+// Errors from os.UserHomeDir() fall back to "." + "/.witsaba/cameras",
+// which is almost certainly wrong but is loud enough to surface.
+func defaultGalleryRootDir() string {
+	home := os.Getenv("HOME")
+	if home == "" {
+		if u, err := os.UserHomeDir(); err == nil {
+			home = u
+		} else {
+			home = "."
+		}
+	}
+	return filepath.Join(home, ".witsaba", "cameras")
 }

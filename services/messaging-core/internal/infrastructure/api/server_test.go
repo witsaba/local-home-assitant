@@ -12,12 +12,13 @@ import (
 
 	"github.com/witsaba/local-home-assitant/services/messaging-core/internal/application/ports"
 	"github.com/witsaba/local-home-assitant/services/messaging-core/internal/infrastructure/devices"
+	"github.com/witsaba/local-home-assitant/services/messaging-core/internal/infrastructure/gallery"
 )
 
 // mockRepo is a fake DeviceRepository for handler tests.
 type mockRepo struct {
-	devs     []*devices.Device
-	listErr  error
+	devs    []*devices.Device
+	listErr error
 }
 
 func (m *mockRepo) GetByMAC(ctx context.Context, mac string) (*devices.Device, error) {
@@ -31,16 +32,38 @@ func (m *mockRepo) ListActive(ctx context.Context, maxAge time.Duration) ([]*dev
 	return m.devs, nil
 }
 
+// ListAll returns every known device regardless of freshness. The
+// gallery uses it to label historical shots, which may predate the
+// active window.
+func (m *mockRepo) ListAll(ctx context.Context) ([]*devices.Device, error) {
+	if m.listErr != nil {
+		return nil, m.listErr
+	}
+	return m.devs, nil
+}
+
+// newTestHandler wires a handler over an empty temporary capture root
+// so gallery routes exercise the real filesystem path without touching
+// the developer's own captures.
+func newTestHandler(t *testing.T, repo devices.DeviceRepository, log ports.Logger) *Handler {
+	t.Helper()
+	return NewHandler(repo, gallery.NewStore(t.TempDir()), log)
+}
+
 // mockLogger records log calls for assertions.
 type mockLogger struct {
 	calls []string
 }
 
-func (l *mockLogger) Debug(msg string, fields ...ports.Field) { l.calls = append(l.calls, "debug:"+msg) }
-func (l *mockLogger) Info(msg string, fields ...ports.Field)  { l.calls = append(l.calls, "info:"+msg) }
-func (l *mockLogger) Warn(msg string, fields ...ports.Field)  { l.calls = append(l.calls, "warn:"+msg) }
-func (l *mockLogger) Error(msg string, fields ...ports.Field) { l.calls = append(l.calls, "error:"+msg) }
-func (l *mockLogger) Sync() error                              { return nil }
+func (l *mockLogger) Debug(msg string, fields ...ports.Field) {
+	l.calls = append(l.calls, "debug:"+msg)
+}
+func (l *mockLogger) Info(msg string, fields ...ports.Field) { l.calls = append(l.calls, "info:"+msg) }
+func (l *mockLogger) Warn(msg string, fields ...ports.Field) { l.calls = append(l.calls, "warn:"+msg) }
+func (l *mockLogger) Error(msg string, fields ...ports.Field) {
+	l.calls = append(l.calls, "error:"+msg)
+}
+func (l *mockLogger) Sync() error { return nil }
 
 func TestListActive_ReturnsTwoDevices(t *testing.T) {
 	now := time.Now().Truncate(time.Second)
@@ -65,7 +88,7 @@ func TestListActive_ReturnsTwoDevices(t *testing.T) {
 		},
 	}
 
-	h := NewHandler(repo, &mockLogger{})
+	h := newTestHandler(t, repo, &mockLogger{})
 	req := httptest.NewRequest("GET", "/api/devices/active", nil)
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, req)
@@ -97,7 +120,7 @@ func TestListActive_ReturnsTwoDevices(t *testing.T) {
 
 func TestListActive_EmptyResult(t *testing.T) {
 	repo := &mockRepo{devs: nil}
-	h := NewHandler(repo, &mockLogger{})
+	h := newTestHandler(t, repo, &mockLogger{})
 	req := httptest.NewRequest("GET", "/api/devices/active", nil)
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, req)
@@ -118,7 +141,7 @@ func TestListActive_EmptyResult(t *testing.T) {
 func TestListActive_InternalError(t *testing.T) {
 	repo := &mockRepo{listErr: errors.New("database unavailable")}
 	log := &mockLogger{}
-	h := NewHandler(repo, log)
+	h := newTestHandler(t, repo, log)
 	req := httptest.NewRequest("GET", "/api/devices/active", nil)
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, req)
@@ -139,7 +162,7 @@ func TestListActive_InternalError(t *testing.T) {
 
 func TestListActive_WrongMethod(t *testing.T) {
 	repo := &mockRepo{}
-	h := NewHandler(repo, &mockLogger{})
+	h := newTestHandler(t, repo, &mockLogger{})
 	req := httptest.NewRequest("POST", "/api/devices/active", nil)
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, req)

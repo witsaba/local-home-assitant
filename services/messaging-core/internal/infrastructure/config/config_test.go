@@ -214,8 +214,55 @@ func clearEnv(t *testing.T) {
 		"STREAM_PORT", "API_PORT",
 		"MESSAGING_CORE_PG_HOST", "MESSAGING_CORE_PG_PORT", "MESSAGING_CORE_PG_DATABASE", "MESSAGING_CORE_PG_USER", "MESSAGING_CORE_PG_PASSWORD",
 		"MESSAGING_CORE_PG_MAX_CONNS", "MESSAGING_CORE_PG_MIN_CONNS", "MESSAGING_CORE_PG_MAX_CONN_LIFETIME", "MESSAGING_CORE_PG_MAX_CONN_IDLE_TIME",
+		"GALLERY_ROOT_DIR",
 	}
 	for _, k := range keys {
 		os.Unsetenv(k)
+	}
+}
+
+// TestLoad_GalleryRootDir_Default pins the default to the same path the
+// workers service uses for SURVEILLANCE_ROOT_DIR, so both processes
+// agree on the capture root without extra configuration.
+func TestLoad_GalleryRootDir_Default(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("MESSAGING_CORE_PG_PASSWORD", "dummy")
+	t.Setenv("HOME", "/home/pi")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := "/home/pi/.witsaba/cameras"
+	if cfg.GalleryRootDir != want {
+		t.Errorf("GalleryRootDir: got %q, want %q", cfg.GalleryRootDir, want)
+	}
+}
+
+func TestLoad_GalleryRootDir_Override(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("MESSAGING_CORE_PG_PASSWORD", "dummy")
+	t.Setenv("GALLERY_ROOT_DIR", "/var/lib/witsaba/cameras")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.GalleryRootDir != "/var/lib/witsaba/cameras" {
+		t.Errorf("GalleryRootDir: got %q, want %q", cfg.GalleryRootDir, "/var/lib/witsaba/cameras")
+	}
+}
+
+func TestLoad_EmptyGalleryRootDirFallsBack(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("MESSAGING_CORE_PG_PASSWORD", "dummy")
+	t.Setenv("HOME", "/home/pi")
+	// An empty value is treated as unset by envStr, so the default wins
+	// rather than the service starting with a blank capture root.
+	t.Setenv("GALLERY_ROOT_DIR", "")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.GalleryRootDir != "/home/pi/.witsaba/cameras" {
+		t.Errorf("GalleryRootDir: got %q, want the default", cfg.GalleryRootDir)
 	}
 }
