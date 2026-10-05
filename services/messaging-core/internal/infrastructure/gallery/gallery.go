@@ -199,7 +199,11 @@ func (s *Store) ListDays() ([]DaySummary, error) {
 		return nil, fmt.Errorf("reading capture root %q: %w", s.root, err)
 	}
 
-	var out []DaySummary
+	// Initialised, not left nil: a nil slice marshals to JSON null, and the
+	// browser does days.length on this. An empty archive is the normal
+	// first-run state, so returning null here would turn "no captures yet"
+	// into a JavaScript error on a freshly deployed Pi.
+	out := []DaySummary{}
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue

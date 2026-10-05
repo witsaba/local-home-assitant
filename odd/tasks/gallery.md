@@ -151,7 +151,7 @@ change, so the gallery is usable before retention lands.
   plus the post-deploy assert list. The exact-match block is required: a path
   that is the stem of a prefix location is 301'd to its slash form *before*
   `try_files` runs, which is exactly how `/stream` broke once.
-- [ ] **U6** — verification log and Pi deployment.
+- [x] **U6** — verification log and Pi deployment.
 
 ## Frontend constraints (carried from `stream-page-cctv-grid.md`)
 
@@ -212,3 +212,85 @@ and rewrite the import prefix from it.
 
 Corrected on disk. The Go toolchain, `GOCACHE`, `GOMODCACHE`, vendor and
 `GODEBUG=goindex=0` were all innocent. No reinstall is needed.
+
+## Verification log
+
+### Automated, reproducible here
+
+```
+services/messaging-core   build ./...  vet ./...  test -race ./...   PASS
+services/workers          build ./...  vet ./...  test -race ./...   PASS
+node --test frontend/web_ui/test/                                       17/17 PASS
+bash -n scripts/install/*.sh                                            PASS
+gofmt -l on every file this branch touched                             clean
+```
+
+`gofmt -l` still reports `surveillance.go` and `types.go`. Both were already
+unformatted at `461f083` before this branch touched them, and the drift does
+not overlap the retention code. Left alone rather than mixed into a feature
+diff.
+
+### Defects this verification found
+
+**`/api/gallery/days` returned `null` for an empty archive.** `ListDays`
+declared `var out []DaySummary` and never appended when the capture root
+existed but held no date-named directories, so it marshalled to `null`. The
+page does `days.length` on that array, which throws. This is the first-run
+state of every fresh deployment: the systemd unit creates the root, the worker
+has not captured anything yet, and the gallery would have shown an error
+instead of "no captures yet". Fixed by initialising the slice; pinned by
+`TestGalleryDays_EmptyArchiveIs200NotError`. The `os.IsNotExist` branch
+already returned `[]`, so only the existing-but-empty root was affected, which
+is why the unit tests did not catch it.
+
+**`PruneOlderThan` aborted the sweep on the first failed removal.** The comment
+said "Report but do not abort: one unremovable day must not stop the rest of
+the archive from being reclaimed" and the code did `return`. Retention exists
+to bound disk growth, so skipping the remaining archive over one stubborn
+directory defeats its purpose. Failures are now collected with `errors.Join`
+and returned once the sweep finishes, and a day that stays on disk is counted
+as kept so `Days+Kept` accounts for every day directory.
+
+**`TestRunSurvivesAnUnremovableDay` proved nothing.** It pointed `Storage` at a
+missing directory, which is a deliberate no-op, so the prune never failed and
+the assertion passed vacuously. The comment even claimed the root was "made
+unreadable" while the code only deleted it. Replaced with a permission-based
+unremovable day, plus `TestPruneOlderThan_KeepsGoingPastAnUnremovableDay`
+covering the behaviour above. Both skip under root, where the permission bits
+would be ignored and the directory would simply be removed.
+
+**`/api/gallery/day` and `/api/gallery/days` had no HTTP-level tests.** The
+image and thumbnail endpoints had thorough coverage; the two the page loads
+first were only covered at the store level. Their JSON is now load-bearing for
+a browser, so `gallery_day_test.go` pins both shapes over real HTTP. Note that
+the two responses are deliberately different — `cameras` is a count in the
+summary and a label list in the detail — and writing one Go struct for both
+makes `encoding/json` silently drop the duplicated tag. The test types are
+separate for that reason.
+
+### Pi deployment checks (operator)
+
+Not run here; no Pi, Postgres or nginx in this environment. After pulling:
+
+1. `systemctl status witsaba-messaging-core witsaba-workers` — both active.
+   The gallery needs neither to change, only the ones added in U2-U4.
+2. `systemctl show -p ReadWritePaths witsaba-messaging-core` — must contain
+   the capture root. Without it `ProtectHome=read-only` makes the thumbnail
+   cache fail with `EROFS` and every tile falls back to the placeholder.
+3. `sudo -u witsaba ls -ld $GALLERY_ROOT_DIR` and
+   `sudo -u witsaba touch $GALLERY_ROOT_DIR/.probe` — the worker and the API
+   must both be able to write there.
+4. `curl -s localhost:8081/api/gallery/days` — `[]` before any capture, then
+   one entry per day. `null` means an old binary.
+5. `curl -s 'localhost:8081/api/gallery/day?date='"$(date +%F)"` — moments
+   grouped by shared tick, times as `HH-MM-SS`.
+6. `curl -sI 'localhost:8081/api/gallery/thumb?date=…&t=…&mac=…&w=320'` —
+   `200`, `image/jpeg`, and an `ETag`. The file then exists under
+   `$GALLERY_ROOT_DIR/<date>/.thumbs/320/`.
+7. `curl -sI localhost:8081/api/gallery/img?…` then repeat with
+   `-H 'If-None-Match: <etag>'` — expect `304`.
+8. In the browser, `https://<host>/gallery` loads a day grid;
+   `/gallery.html` also resolves; `/stream` still works, which is the exact
+   match that must not be disturbed.
+9. Leave it overnight, then confirm `SURVEILLANCE_RETENTION_DAYS` drops old
+   day directories rather than the newest one.

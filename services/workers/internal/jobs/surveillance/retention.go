@@ -25,6 +25,7 @@ package surveillance
 // property that already holds.
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -91,6 +92,10 @@ func (s Storage) PruneOlderThan(now time.Time, keepDays int) (PruneResult, error
 		return res, fmt.Errorf("reading capture root %q: %w", s.Root, err)
 	}
 
+	// Accumulates per-day removal failures so the sweep can finish and
+	// still report what went wrong.
+	var pruneErr error
+
 	// Dates are zero-padded and lexicographically sortable, so comparing
 	// folder names compares calendar dates. The cutoff is computed with
 	// AddDate rather than a fixed duration in hours so a day boundary is
@@ -145,15 +150,26 @@ func (s Storage) PruneOlderThan(now time.Time, keepDays int) (PruneResult, error
 		size := dirSize(path)
 
 		if err := os.RemoveAll(path); err != nil {
-			// Report but do not abort: one unremovable day must not
-			// stop the rest of the archive from being reclaimed.
-			return res, fmt.Errorf("removing day %q: %w", name, err)
+			// Keep sweeping. One unremovable day must not stop the rest
+			// of the archive from being reclaimed: retention is bounded
+			// disk recovery, and the days that CAN be reclaimed matter
+			// more than the one that cannot. The failure is collected and
+			// returned once the sweep finishes, so the caller still learns
+			// about it without the later days being silently skipped.
+			pruneErr = errors.Join(pruneErr,
+				fmt.Errorf("removing day %q: %w", name, err))
+			// Counted as kept because it is still on disk. That keeps
+			// Days+Kept equal to the number of day directories seen,
+			// which is what makes the log explain where the space went
+			// when one day refuses to go.
+			res.Kept++
+			continue
 		}
 		res.Days++
 		res.Bytes += size
 	}
 
-	return res, nil
+	return res, pruneErr
 }
 
 // dirSize sums the regular-file sizes beneath a day directory.
