@@ -4,7 +4,9 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/witsaba/local-home-assitant/services/messaging-core/internal/application/ports"
@@ -57,6 +59,7 @@ func NewHandler(repo devices.DeviceRepository, store *gallery.Store, log ports.L
 	h.mux.HandleFunc("GET /api/gallery/days", h.galleryDays)
 	h.mux.HandleFunc("GET /api/gallery/day", h.galleryDay)
 	h.mux.HandleFunc("GET /api/gallery/img", h.galleryImage)
+	h.mux.HandleFunc("GET /api/gallery/thumb", h.galleryThumb)
 	return h
 }
 
@@ -187,6 +190,81 @@ func (h *Handler) galleryImage(w http.ResponseWriter, r *http.Request) {
 	http.ServeContent(w, r, frame.Name(), frame.ModTime(), frame)
 }
 
+// galleryThumb serves one generated thumbnail, creating it on first request.
+//
+// The page asks for gallery.DefaultThumbWidth and nothing else, so a day view
+// generates exactly one thumbnail per capture. Generation happens here rather
+// than in the workers service on purpose: the worker would have to decode and
+// scale every capture for every camera whether or not anyone ever looks at
+// that day, and the gallery is read far more rarely than it is written.
+func (h *Handler) galleryThumb(w http.ResponseWriter, r *http.Request) {
+	const route = "GET /api/gallery/thumb"
+	if h.galleryUnavailable(w, route) {
+		return
+	}
+
+	q := r.URL.Query()
+	date, tick, mac := q.Get("date"), q.Get("t"), q.Get("mac")
+
+	if err := gallery.ValidateDate(date); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if err := gallery.ValidateTick(tick); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if err := gallery.ValidateMAC(mac); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
+	width, err := thumbWidthParam(q.Get("w"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
+	thumb, err := h.store.Thumb(date, tick, mac, width)
+	if err != nil {
+		h.writeFrameError(w, route, date, tick, mac, err)
+		return
+	}
+	defer thumb.Close()
+
+	// Unlike a full frame, a thumbnail is immutable: it is derived from a
+	// capture that already passed the completeness guard, and nothing
+	// rewrites it afterwards. That is what makes a day of grid tiles cost
+	// one request each, and a reload costs nothing. The ETag is still set so
+	// a client that does revalidate gets a 304 rather than the bytes.
+	w.Header().Set("Cache-Control", "private, max-age=86400, immutable")
+	w.Header().Set("ETag", thumb.ETag())
+
+	http.ServeContent(w, r, thumb.Name(), thumb.ModTime(), thumb)
+}
+
+// thumbWidthParam parses the optional w parameter.
+//
+// An absent width is the canonical size, which keeps the common URL short and
+// means a page that does not care about tile density still gets the cached
+// tiles every other client is already using. A present but unsupported width
+// is a 400 rather than something to clamp, because a silently narrowed tile
+// looks like a layout bug on the page and not like a request it got wrong.
+func thumbWidthParam(raw string) (int, error) {
+	if raw == "" {
+		return gallery.DefaultThumbWidth, nil
+	}
+	w, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, fmt.Errorf("width %q is not a number", raw)
+	}
+	if !gallery.IsAllowedThumbWidth(w) {
+		return 0, fmt.Errorf("width %d is not supported; use one of %v",
+			w, gallery.AllowedThumbWidths())
+	}
+	return w, nil
+}
+
 // writeFrameError maps a failed capture lookup onto a response.
 //
 // An incomplete capture is 503 with Retry-After rather than 404 or 500
@@ -201,6 +279,14 @@ func (h *Handler) writeFrameError(w http.ResponseWriter, route, date, tick, mac 
 	case errors.Is(err, gallery.ErrFrameNotFound):
 		writeJSON(w, http.StatusNotFound, map[string]string{
 			"error": "no capture at that date, time and camera",
+		})
+
+	case errors.Is(err, gallery.ErrSourceTooLarge):
+		// 413 is the honest status: the referenced file is real and
+		// readable, it is simply larger than this server will decode. No
+		// thumbnail is written, and a full frame can still be fetched.
+		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{
+			"error": "that capture is too large to thumbnail",
 		})
 
 	case errors.Is(err, gallery.ErrFrameIncomplete):

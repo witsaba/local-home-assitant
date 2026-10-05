@@ -42,7 +42,9 @@ const (
 	// thumbDirName is the per-day thumbnail cache directory, created
 	// lazily by the thumbnail endpoint. It is a dot-directory so that
 	// *.jpg globs cannot match inside it, and it lives inside the day
-	// folder so the retention prune removes it for free.
+	// folder so the retention prune removes it for free. Below it, one
+	// subdirectory per supported width keeps each size independently
+	// cached; see thumbPath.
 	thumbDirName = ".thumbs"
 )
 
@@ -98,6 +100,11 @@ func ValidateMAC(raw string) error {
 // intended exception and lives in its own type.
 type Store struct {
 	root string
+
+	// thumbSlots bounds concurrent thumbnail decodes. It is a buffered
+	// channel used as a counting semaphore: a send acquires a slot and a
+	// receive releases it. See thumbDecodeSlots for why the bound exists.
+	thumbSlots chan struct{}
 }
 
 // NewStore returns a Store rooted at dir. The directory is not required to
@@ -105,7 +112,10 @@ type Store struct {
 // because "no captures yet" is a normal state for a fresh install, not an
 // error worth surfacing as a 500.
 func NewStore(dir string) *Store {
-	return &Store{root: dir}
+	return &Store{
+		root:       dir,
+		thumbSlots: make(chan struct{}, thumbDecodeSlots),
+	}
 }
 
 // Root returns the configured capture root.
@@ -136,19 +146,6 @@ func (s *Store) framePath(date, tick, mac string) (string, error) {
 	p := filepath.Join(s.root, date, tick+"_"+mac+tickSuffix)
 	if !withinRoot(s.root, p) {
 		return "", fmt.Errorf("resolved path escapes the capture root")
-	}
-	return p, nil
-}
-
-// thumbPath builds the on-disk path of one cached thumbnail. The .thumbs
-// directory is not created here; the caller does that only on a cache miss.
-func (s *Store) thumbPath(date, tick, mac string) (string, error) {
-	if err := validateAll(date, tick, mac); err != nil {
-		return "", err
-	}
-	p := filepath.Join(s.root, date, thumbDirName, tick+"_"+mac+tickSuffix)
-	if !withinRoot(s.root, p) {
-		return "", fmt.Errorf("resolved thumbnail path escapes the capture root")
 	}
 	return p, nil
 }

@@ -41,6 +41,13 @@ ENV_FILE="$INSTALL_DIR/witsaba.env"
 
 set -a; . "$ENV_FILE"; set +a
 
+# The gallery thumbnail cache lives inside the capture root and is written by
+# messaging-core, so that unit needs write access to the directory. Resolved
+# here with the same default both Go services use, so the unit, the API and
+# the capture writer cannot disagree about the path.
+GALLERY_ROOT_DIR="${GALLERY_ROOT_DIR:-${SURVEILLANCE_ROOT_DIR:-$INSTALL_DIR/cameras}}"
+mkdir -p "$GALLERY_ROOT_DIR"
+
 PG_BIN_DIR="${PG_BIN_DIR:-$HOMEBREW_PREFIX/opt/postgresql@16/bin}"
 PG_CTL="$PG_BIN_DIR/pg_ctl"
 
@@ -167,12 +174,17 @@ KillSignal=SIGTERM
 TimeoutStopSec=15
 MemoryMax=200M
 MemoryAccounting=yes
-# Hardening: the binary needs no privileges and writes nothing to disk.
+# Hardening: the binary needs no privileges. Its only disk writes are the
+# gallery thumbnail cache under the capture root, which is why that path
+# appears in ReadWritePaths below.
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=$INSTALL_DIR
+# ReadWritePaths overrides the read-only mounts from ProtectSystem=strict and
+# ProtectHome=read-only, so naming the capture root here is what makes the
+# thumbnail cache writable even though it lives under $HOME.
+ReadWritePaths=$INSTALL_DIR $GALLERY_ROOT_DIR
 
 [Install]
 WantedBy=default.target

@@ -69,7 +69,17 @@ func (s *Store) OpenFrame(date, tick, mac string) (*Frame, error) {
 	if err != nil {
 		return nil, err
 	}
+	return openFrameAt(p)
+}
 
+// openFrameAt opens one already-resolved path under the capture root and
+// applies the completeness guard.
+//
+// It is separate from OpenFrame so the thumbnail cache, whose paths are
+// generated rather than derived from a client address, go through exactly
+// the same open-and-validate path. One guard with two callers cannot drift
+// into two different definitions of "a usable image".
+func openFrameAt(p string) (*Frame, error) {
 	f, err := os.Open(p)
 	if err != nil {
 		if os.IsNotExist(err) {
