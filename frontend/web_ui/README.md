@@ -37,7 +37,30 @@ browser never makes a cross-origin request:
 |---|---|---|
 | `/` and other pages | files in `~/.witsaba/nginx/html` | served from disk |
 | `/api/*` | `127.0.0.1:8081` | `messaging-core` REST |
+| `/api/gallery/*` | `127.0.0.1:8082` | `workers` gallery (longest-prefix match wins) |
 | `/stream/*` | `127.0.0.1:8080` | `messaging-core` WebSocket gateway |
+
+The gallery upstream is a separate location block because nginx routes by
+**longest matching prefix**, not by file order. `/api/gallery/` is longer
+than `/api/`, so it reaches `workers` while every other `/api/` route keeps
+going to `messaging-core`. The `workers` listener binds `127.0.0.1` only, so
+it is never exposed directly — nginx is the sole LAN-facing door, and this
+page is reachable from a phone on the local network.
+
+Gallery endpoints (all on the `workers` listener):
+
+| Method | Path | Answers |
+|---|---|---|
+| `GET` | `/api/gallery/days?from=&to=` | `[{date, count}]`, one entry per date including empty days |
+| `GET` | `/api/gallery/day?date=` | `[{name, mac, time, bytes}]`, newest first |
+| `GET` | `/api/gallery/img?date=&name=` | the original JPEG |
+| `GET` | `/api/gallery/thumb?date=&name=` | a 320px thumbnail, generated on first request |
+| `DELETE` | `/api/gallery/photo?date=&name=` | `204`, permanent |
+
+Thumbnails cache under `~/.witsaba/thumbs/`, a sibling of the capture
+archive. That location is not arbitrary: the `workers` unit sets
+`ProtectHome=read-only` with `ReadWritePaths=$HOME/.witsaba`, so a cache
+anywhere else under `$HOME` would be denied at write time.
 
 The port is `WITSABA_HTTP_PORT`, default `4173`. `/stream/` carries the
 `Upgrade` and `Connection` headers a WebSocket needs, and `proxy_buffering off`

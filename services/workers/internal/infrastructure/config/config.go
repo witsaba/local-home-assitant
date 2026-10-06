@@ -26,6 +26,13 @@ type Config struct {
 	SurveillanceDeviceFreshnessMinutes int
 	SurveillanceRootDir                string
 
+	// Gallery HTTP server. The listener binds loopback by default:
+	// nginx is the only LAN-facing entry point, which is what lets the
+	// gallery be reachable from a phone without this server ever being
+	// exposed to the network.
+	GalleryPort int
+	GalleryBind string
+
 	// Logging.
 	LogLevel string
 
@@ -60,6 +67,11 @@ func Load() (*Config, error) {
 		SurveillanceCaptureTimeoutSeconds:  envInt("SURVEILLANCE_CAPTURE_TIMEOUT_SECONDS", 10),
 		SurveillanceDeviceFreshnessMinutes: envInt("SURVEILLANCE_DEVICE_FRESHNESS_MINUTES", 5),
 		SurveillanceRootDir:                envStr("SURVEILLANCE_ROOT_DIR", defaultSurveillanceRootDir()),
+
+		// Gallery listener. 8082 is free: 8080 is the stream gateway,
+		// 8081 the messaging-core API, 4173 nginx.
+		GalleryPort: envInt("GALLERY_PORT", 8082),
+		GalleryBind: envStr("GALLERY_BIND", "127.0.0.1"),
 
 		LogLevel: envStr("LOG_LEVEL", "info"),
 
@@ -145,6 +157,12 @@ func validate(cfg *Config) error {
 	}
 	if strings.TrimSpace(cfg.SurveillanceRootDir) == "" {
 		return fmt.Errorf("SURVEILLANCE_ROOT_DIR must be non-empty")
+	}
+	if cfg.GalleryPort < 1 || cfg.GalleryPort > 65535 {
+		return fmt.Errorf("GALLERY_PORT must be in [1, 65535], got %d", cfg.GalleryPort)
+	}
+	if strings.TrimSpace(cfg.GalleryBind) == "" {
+		return fmt.Errorf("GALLERY_BIND must be non-empty")
 	}
 	return nil
 }

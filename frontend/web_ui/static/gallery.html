@@ -1,0 +1,449 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Gallery &middot; Witsaba</title>
+    <meta
+      name="description"
+      content="Captured camera photos by day, with removal."
+    />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/assets/app.css" />
+  </head>
+  <body>
+    <div class="page">
+      <header class="top-bar">
+        <div class="top-bar__brand">
+          <h1 class="top-bar__title">Gallery</h1>
+          <span class="top-bar__subtitle" id="subtitle">loading&hellip;</span>
+        </div>
+        <nav class="top-bar__nav" aria-label="Primary">
+          <a class="top-bar__link" href="/">Home</a>
+          <a class="top-bar__link" href="/devices">Devices</a>
+          <a class="top-bar__link" href="/gallery" aria-current="page">Gallery</a>
+          <a class="top-bar__link" href="/stream">Stream</a>
+        </nav>
+      </header>
+
+      <main>
+        <section class="panel" aria-label="Week">
+          <div class="panel__head">
+            <h2 class="panel__title" id="week-label">&nbsp;</h2>
+            <div class="week-nav">
+              <button class="btn" type="button" id="prev-week" aria-label="Previous week">
+                &larr; Previous
+              </button>
+              <button class="btn" type="button" id="this-week">This week</button>
+              <button class="btn" type="button" id="next-week" aria-label="Next week">
+                Next &rarr;
+              </button>
+            </div>
+          </div>
+          <div class="panel__body">
+            <div class="week-strip" id="week-strip" role="group" aria-label="Days in this week"></div>
+          </div>
+        </section>
+
+        <section class="panel" aria-label="Photos">
+          <div class="panel__head">
+            <h2 class="panel__title" id="day-label">&nbsp;</h2>
+            <span
+              class="status-chip status-chip--info"
+              id="api-chip"
+              role="status"
+            >
+              <span class="status-chip__dot" aria-hidden="true"></span>
+              <span data-status-label>checking</span>
+            </span>
+          </div>
+          <div class="panel__body panel__body--flush" id="photo-host">
+            <p class="state">Loading&hellip;</p>
+          </div>
+        </section>
+      </main>
+
+      <footer class="page-footer">
+        <span
+          >Removal is permanent and there is no undo. The worker captures every
+          15 minutes from each camera that answered recently.</span
+        >
+        <span id="last-updated"></span>
+      </footer>
+    </div>
+
+    <script src="/assets/app.js"></script>
+    <script>
+      (function () {
+        "use strict";
+
+        var el = witsaba.el;
+
+        var strip = document.getElementById("week-strip");
+        var weekLabel = document.getElementById("week-label");
+        var photoHost = document.getElementById("photo-host");
+        var dayLabel = document.getElementById("day-label");
+        var chip = document.getElementById("api-chip");
+        var subtitle = document.getElementById("subtitle");
+        var lastUpdated = document.getElementById("last-updated");
+
+        // "anchor" is the week currently on screen; "selected" is the day
+        // whose photos are shown. They are separate so paging weeks does
+        // not silently move the day you were looking at.
+        var anchor = today();
+        var selected = today();
+
+        function pad(n) {
+          return n < 10 ? "0" + n : String(n);
+        }
+
+        // Local-time date keys. Building these by hand avoids toISOString(),
+        // which would shift the day across the UTC boundary.
+        function dateKey(d) {
+          return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate());
+        }
+
+        function today() {
+          var n = new Date();
+          return new Date(n.getFullYear(), n.getMonth(), n.getDate());
+        }
+
+        function addDays(d, n) {
+          return new Date(d.getFullYear(), d.getMonth(), d.getDate() + n);
+        }
+
+        // Monday-first, which is how an operator reads a week.
+        function startOfWeek(d) {
+          var out = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+          var mondayFirst = (out.getDay() + 6) % 7;
+          return addDays(out, -mondayFirst);
+        }
+
+        function weekDays() {
+          var start = startOfWeek(anchor);
+          var out = [];
+          for (var i = 0; i < 7; i++) out.push(addDays(start, i));
+          return out;
+        }
+
+        function longDate(d) {
+          return d.toLocaleDateString(undefined, {
+            weekday: "long",
+            year: "numeric",
+            month: "long",
+            day: "numeric",
+          });
+        }
+
+        function shortDate(d) {
+          return d.toLocaleDateString(undefined, {
+            weekday: "short",
+            month: "short",
+            day: "numeric",
+          });
+        }
+
+        function clockOf(rfc3339) {
+          var d = new Date(rfc3339);
+          if (isNaN(d.getTime())) return "";
+          return pad(d.getHours()) + ":" + pad(d.getMinutes());
+        }
+
+        function thumbUrl(day, name) {
+          return (
+            "/api/gallery/thumb?date=" +
+            encodeURIComponent(day) +
+            "&name=" +
+            encodeURIComponent(name)
+          );
+        }
+
+        /* ---------------------------------------------------------------------
+           Week strip
+           ------------------------------------------------------------------- */
+        function renderStrip(counts) {
+          var byDate = {};
+          counts.forEach(function (c) {
+            byDate[c.date] = c.count;
+          });
+
+          var days = weekDays();
+          weekLabel.textContent =
+            shortDate(days[0]) + " \u2013 " + shortDate(days[6]);
+
+          var cells = days.map(function (d) {
+            var key = dateKey(d);
+            var count = byDate[key] === undefined ? 0 : byDate[key];
+            var isSelected = key === dateKey(selected);
+
+            var cell = el(
+              "button",
+              {
+                class:
+                  "week-day" +
+                  (isSelected ? " week-day--selected" : "") +
+                  (count === 0 ? " week-day--empty" : ""),
+                type: "button",
+                "aria-pressed": isSelected ? "true" : "false",
+                "aria-label":
+                  longDate(d) + ", " + count + (count === 1 ? " photo" : " photos"),
+              },
+              [
+                el("span", { class: "week-day__name", text: d.toLocaleDateString(undefined, { weekday: "short" }) }),
+                el("span", { class: "week-day__date", text: d.getDate() }),
+                el("span", {
+                  class: "week-day__count",
+                  text: count === 0 ? "\u2014" : String(count),
+                }),
+              ],
+            );
+
+            cell.addEventListener("click", function () {
+              selected = d;
+              renderStrip(counts);
+              loadDay();
+            });
+
+            return cell;
+          });
+
+          strip.replaceChildren.apply(strip, cells);
+        }
+
+        function loadWeek() {
+          var days = weekDays();
+          var from = dateKey(days[0]);
+          var to = dateKey(days[6]);
+
+          return witsaba
+            .api("/api/gallery/days?from=" + from + "&to=" + to, { timeoutMs: 5000 })
+            .then(function (counts) {
+              if (!Array.isArray(counts)) {
+                throw new Error("API returned a non-array payload");
+              }
+              renderStrip(counts);
+            });
+        }
+
+        /* ---------------------------------------------------------------------
+           Day view
+           ------------------------------------------------------------------- */
+        function photoTile(day, p) {
+          var when = clockOf(p.time);
+          var shortMac = p.mac ? p.mac.slice(-6) : "";
+
+          var image = el("img", {
+            class: "photo-tile__image",
+            src: thumbUrl(day, p.name),
+            alt: "Captured at " + when,
+            loading: "lazy",
+            decoding: "async",
+          });
+
+          // A thumbnail that fails to generate still leaves the operator
+          // able to reach the original, so the tile links to it.
+          var link = el(
+            "a",
+            {
+              class: "photo-tile__link",
+              href:
+                "/api/gallery/img?date=" +
+                encodeURIComponent(day) +
+                "&name=" +
+                encodeURIComponent(p.name),
+              title: "Open the full-size photo",
+            },
+            [image]
+          );
+
+          var remove = el("button", {
+            class: "btn btn--danger photo-tile__remove",
+            type: "button",
+            text: "Remove",
+            "aria-label": "Remove the photo captured at " + when,
+          });
+          remove.addEventListener("click", function () {
+            askToRemove(tile, day, p, remove);
+          });
+
+          var tile = el("figure", { class: "photo-tile" }, [
+            link,
+            el("figcaption", { class: "photo-tile__meta" }, [
+              el("span", { class: "photo-tile__time", text: when }),
+              el("span", {
+                class: "photo-tile__mac",
+                text: shortMac,
+                title: p.mac,
+              }),
+            ]),
+            el("div", { class: "photo-tile__actions" }, [remove]),
+          ]);
+
+          return tile;
+        }
+
+        /* Inline confirmation. DESIGN.md refuses modal pop-ups as a first
+         * thought, so the tile itself flips to confirm/cancel in place
+         * rather than opening a dialog. */
+        function askToRemove(tile, day, p, removeBtn) {
+          var actions = removeBtn.parentNode;
+
+          var confirm = el("button", {
+            class: "btn btn--danger",
+            type: "button",
+            text: "Confirm remove",
+          });
+          var cancel = el("button", { class: "btn", type: "button", text: "Cancel" });
+
+          var note = el("p", {
+            class: "photo-tile__note",
+            text: "Permanent. " + (p.mac || "camera") + " at " + clockOf(p.time),
+          });
+
+          cancel.addEventListener("click", function () {
+            actions.replaceChildren(removeBtn);
+          });
+
+          confirm.addEventListener("click", function () {
+            confirm.disabled = true;
+            cancel.disabled = true;
+
+            witsaba
+              .api(
+                "/api/gallery/photo?date=" +
+                  encodeURIComponent(day) +
+                  "&name=" +
+                  encodeURIComponent(p.name),
+                { method: "DELETE", timeoutMs: 8000 }
+              )
+              .then(function () {
+                tile.remove();
+                refreshCountsAfterDelete(day);
+              })
+              .catch(function (err) {
+                confirm.disabled = false;
+                cancel.disabled = false;
+                actions.replaceChildren(
+                  el("p", {
+                    class: "photo-tile__note photo-tile__note--error",
+                    text: "Could not remove. " + err.message,
+                  })
+                );
+              });
+          });
+
+          actions.replaceChildren(note, confirm, cancel);
+          confirm.focus();
+        }
+
+        function refreshCountsAfterDelete(day) {
+          loadWeek()
+            .then(function () {
+              var remaining = document.querySelectorAll(".photo-tile").length;
+              updateChip(remaining, day);
+            })
+            .catch(function () {
+              /* The photo is gone either way; a stale strip count is
+               * corrected by the next poll. */
+            });
+        }
+
+        function updateChip(count, day) {
+          var d = new Date(day + "T00:00:00");
+          var label = count === 1 ? "1 photo" : count + " photos";
+          witsaba.setStatus(
+            chip,
+            count === 0 ? "warning" : "healthy",
+            count === 0 ? "no photos" : label,
+            false
+          );
+          dayLabel.textContent = shortDate(d);
+          subtitle.textContent = count === 0 ? "no photos" : label;
+        }
+
+        function loadDay() {
+          var key = dateKey(selected);
+
+          return witsaba
+            .api("/api/gallery/day?date=" + key, { timeoutMs: 8000 })
+            .then(function (photos) {
+              if (!Array.isArray(photos)) {
+                throw new Error("API returned a non-array payload");
+              }
+
+              if (photos.length === 0) {
+                witsaba.showState(
+                  photoHost,
+                  "empty",
+                  "No photos captured on this day",
+                  "The worker captures every 15 minutes from each camera that answered recently. A day with nothing here means no camera answered, or the photos were removed."
+                );
+                updateChip(0, key);
+                return;
+              }
+
+              photoHost.replaceChildren(
+                el(
+                  "div",
+                  { class: "photo-grid" },
+                  photos.map(function (p) {
+                    return photoTile(key, p);
+                  })
+                )
+              );
+              updateChip(photos.length, key);
+            })
+            .catch(function (err) {
+              witsaba.showState(
+                photoHost,
+                "error",
+                "Cannot reach the gallery API",
+                "The stack may be starting, or workers is not running. This page retries automatically.",
+                err.message
+              );
+              witsaba.setStatus(chip, "error", "api unreachable", true);
+              subtitle.textContent = "api offline";
+            });
+        }
+
+        function refresh() {
+          dayLabel.textContent = shortDate(selected);
+          loadWeek()
+            .then(loadDay)
+            .then(function () {
+              lastUpdated.textContent = "updated " + new Date().toLocaleTimeString();
+            })
+            .catch(function (err) {
+              witsaba.showState(
+                photoHost,
+                "error",
+                "Cannot reach the gallery API",
+                "The stack may be starting, or workers is not running. This page retries automatically.",
+                err.message
+              );
+              witsaba.setStatus(chip, "error", "api unreachable", true);
+              subtitle.textContent = "api offline";
+              lastUpdated.textContent =
+                "last attempt " + new Date().toLocaleTimeString();
+            });
+        }
+
+        document.getElementById("prev-week").addEventListener("click", function () {
+          anchor = addDays(anchor, -7);
+          refresh();
+        });
+        document.getElementById("next-week").addEventListener("click", function () {
+          anchor = addDays(anchor, 7);
+          refresh();
+        });
+        document.getElementById("this-week").addEventListener("click", function () {
+          anchor = today();
+          selected = today();
+          refresh();
+        });
+
+        witsaba.onVisible(refresh, 15000);
+      })();
+    </script>
+  </body>
+</html>

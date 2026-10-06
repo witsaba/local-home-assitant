@@ -373,6 +373,10 @@ NATS_HOST=127.0.0.1
 NATS_PORT=4222
 STREAM_PORT=8080
 API_PORT=8081
+# Gallery HTTP listener. Loopback only: nginx on 4173 is the only
+# LAN-facing door, and it proxies /api/gallery/ to this port.
+GALLERY_PORT=8082
+GALLERY_BIND=127.0.0.1
 LOG_LEVEL=info
 DISCOVERY_INTERVAL_SECONDS=60
 DISCOVERY_WORKER_POOL_SIZE=32

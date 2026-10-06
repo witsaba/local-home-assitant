@@ -164,6 +164,39 @@ else
         bad "no exact 'location = /stream'; /stream 301s to /stream/ and the viewer page 404s"
     fi
 
+    # The gallery lives on the workers listener, not messaging-core. nginx
+    # routes by LONGEST matching prefix, so `location /api/gallery/` must be
+    # a separate, longer prefix than `location /api/`. Without it every
+    # gallery request lands on messaging-core and answers 404.
+    if grep -qE '^\s*location /api/gallery/\s*\{' "$NGINX_CONF"; then
+        ok "has a longer-prefix 'location /api/gallery/' block"
+    else
+        bad "no 'location /api/gallery/'; the gallery is proxied to messaging-core and 404s"
+    fi
+
+    if grep -q 'upstream witsaba_gallery' "$NGINX_CONF"; then
+        ok "declares a witsaba_gallery upstream"
+    else
+        bad "no witsaba_gallery upstream; /api/gallery/ has nothing to proxy to"
+    fi
+
+    # The workers gallery listener binds loopback. If someone "fixed" a
+    # connectivity problem by binding 0.0.0.0, the gallery API would be
+    # reachable directly, bypassing nginx entirely.
+    if grep -q 'upstream witsaba_gallery *{ *server 127\.0\.0\.1:' "$NGINX_CONF"; then
+        ok "witsaba_gallery upstream points at loopback"
+    else
+        bad "witsaba_gallery upstream is not loopback-bound"
+    fi
+
+    # The gallery page itself must be present in the document root,
+    # otherwise /gallery 404s at try_files.
+    if [ -f "$NGINX_HTML/gallery.html" ]; then
+        ok "gallery.html is in the document root"
+    else
+        bad "gallery.html missing from $NGINX_HTML; /gallery will 404"
+    fi
+
     # Caching a shell that references new asset names breaks deploys.
     if grep -q 'no-store' "$NGINX_CONF"; then
         ok "html is marked no-store"

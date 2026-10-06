@@ -17,6 +17,10 @@
 
      Fetch a JSON endpoint with a hard timeout. Returns parsed JSON, or throws
      an Error with a message worth showing an operator.
+
+     options.method defaults to GET and is passed through. The gallery's
+     delete route uses DELETE and answers 204 No Content, which resolves to
+     null rather than throwing on an empty body.
      ------------------------------------------------------------------------ */
   function api(path, options) {
     var opts = options || {};
@@ -32,6 +36,7 @@
     }
 
     return fetch(path, {
+      method: opts.method || "GET",
       signal: controller ? controller.signal : undefined,
       cache: "no-store",
       headers: { Accept: "application/json" },
@@ -40,6 +45,7 @@
         if (!res.ok) {
           throw new Error("API returned " + res.status + " " + res.statusText);
         }
+        if (res.status === 204) return null;
         return res.json();
       })
       .finally(function () {

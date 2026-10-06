@@ -232,6 +232,8 @@ func resetEnv(t *testing.T) {
 		"SURVEILLANCE_CAPTURE_TIMEOUT_SECONDS",
 		"SURVEILLANCE_DEVICE_FRESHNESS_MINUTES",
 		"SURVEILLANCE_ROOT_DIR",
+		"GALLERY_PORT",
+		"GALLERY_BIND",
 		"LOG_LEVEL",
 		"PG_HOST",
 		"PG_PORT",
@@ -242,6 +244,68 @@ func resetEnv(t *testing.T) {
 		t.Setenv(k, "")
 	}
 	t.Setenv("PG_WORKER_PASSWORD", "test-pw")
+}
+
+func TestLoad_GalleryDefaults(t *testing.T) {
+	resetEnv(t)
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load() returned error with defaults: %v", err)
+	}
+	// Loopback by default: nginx is the LAN door, this listener is not.
+	if cfg.GalleryBind != "127.0.0.1" {
+		t.Errorf("expected default GalleryBind=127.0.0.1, got %q", cfg.GalleryBind)
+	}
+	if cfg.GalleryPort != 8082 {
+		t.Errorf("expected default GalleryPort=8082, got %d", cfg.GalleryPort)
+	}
+}
+
+func TestLoad_GalleryEnvOverride(t *testing.T) {
+	resetEnv(t)
+	t.Setenv("GALLERY_PORT", "9090")
+	t.Setenv("GALLERY_BIND", "127.0.0.1")
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load() returned error: %v", err)
+	}
+	if cfg.GalleryPort != 9090 {
+		t.Errorf("GalleryPort = %d, want 9090", cfg.GalleryPort)
+	}
+	if cfg.GalleryBind != "127.0.0.1" {
+		t.Errorf("GalleryBind = %q, want 127.0.0.1", cfg.GalleryBind)
+	}
+}
+
+func TestLoad_InvalidGalleryPort(t *testing.T) {
+	cases := []string{"0", "-1", "70000"}
+	for _, v := range cases {
+		resetEnv(t)
+		t.Setenv("GALLERY_PORT", v)
+
+		if _, err := config.Load(); err == nil {
+			t.Errorf("GALLERY_PORT=%s: Load() Err = nil, want non-nil", v)
+		} else if !strings.Contains(err.Error(), "GALLERY_PORT") {
+			t.Errorf("GALLERY_PORT=%s: Err = %q, want it to mention GALLERY_PORT", v, err)
+		}
+	}
+}
+
+func TestLoad_GalleryDefaultsToLoopback(t *testing.T) {
+	resetEnv(t)
+	t.Setenv("GALLERY_BIND", "0.0.0.0")
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load() with an explicit 0.0.0.0 bind should succeed: %v", err)
+	}
+	// Documented as allowed: an operator may deliberately expose it, but
+	// it must be a decision rather than an accident.
+	if cfg.GalleryBind != "0.0.0.0" {
+		t.Errorf("GalleryBind = %q, want the operator's explicit 0.0.0.0", cfg.GalleryBind)
+	}
 }
 
 func TestLoad_SurveillanceDefaults(t *testing.T) {

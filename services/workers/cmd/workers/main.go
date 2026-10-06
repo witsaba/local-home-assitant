@@ -7,8 +7,10 @@ package main
 import (
 	"context"
 	"fmt"
+	"net"
 	"os"
 	"os/signal"
+	"strconv"
 	"sync"
 	"syscall"
 	"time"
@@ -18,6 +20,7 @@ import (
 	"github.com/witsaba/local-home-assitant/services/workers/internal/infrastructure/config"
 	"github.com/witsaba/local-home-assitant/services/workers/internal/infrastructure/db"
 	"github.com/witsaba/local-home-assitant/services/workers/internal/infrastructure/devices"
+	"github.com/witsaba/local-home-assitant/services/workers/internal/infrastructure/httpserver"
 	loggerinfra "github.com/witsaba/local-home-assitant/services/workers/internal/infrastructure/logger"
 	"github.com/witsaba/local-home-assitant/services/workers/internal/jobs/discovery"
 	"github.com/witsaba/local-home-assitant/services/workers/internal/jobs/surveillance"
@@ -67,6 +70,8 @@ func run() int {
 		zap.Int("surveillance_capture_timeout_s", cfg.SurveillanceCaptureTimeoutSeconds),
 		zap.Int("surveillance_device_freshness_min", cfg.SurveillanceDeviceFreshnessMinutes),
 		zap.String("surveillance_root_dir", cfg.SurveillanceRootDir),
+		zap.Int("gallery_port", cfg.GalleryPort),
+		zap.String("gallery_bind", cfg.GalleryBind),
 		zap.Stringer("db_url", cfg.ToPoolConfig()),
 	)
 
@@ -161,6 +166,15 @@ func run() int {
 		close(consumerDone)
 	}()
 
+	// The gallery HTTP listener. Binds loopback by default; nginx proxies
+	// /api/gallery/ to it, so it is never LAN-facing itself.
+	galleryAddr := net.JoinHostPort(cfg.GalleryBind, strconv.Itoa(cfg.GalleryPort))
+	galleryHandler := httpserver.NewHandler(cfg.SurveillanceRootDir, log)
+	galleryDone := make(chan error, 1)
+	go func() {
+		galleryDone <- httpserver.Serve(ctx, galleryHandler, galleryAddr, shutdownTimeout, log)
+	}()
+
 	// Block until a termination signal arrives.
 	<-ctx.Done()
 	log.Info("workers shutting down")
@@ -177,6 +191,21 @@ func run() int {
 	case <-consumerDone:
 	case <-time.After(shutdownTimeout):
 		log.Warn("consumer drain timeout",
+			zap.Duration("timeout", shutdownTimeout),
+		)
+	}
+
+	// The listener sees the same ctx cancellation and drains in-flight
+	// requests. A failure here is logged but does not change the exit
+	// code: the background jobs already stopped cleanly, and a gallery
+	// that could not bind is worth reporting without blocking shutdown.
+	select {
+	case err := <-galleryDone:
+		if err != nil {
+			log.Error("gallery http server error", zap.Error(err))
+		}
+	case <-time.After(shutdownTimeout):
+		log.Warn("gallery shutdown timeout",
 			zap.Duration("timeout", shutdownTimeout),
 		)
 	}

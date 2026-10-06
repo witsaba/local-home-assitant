@@ -62,6 +62,7 @@ LISTEN_PORT="${WITSABA_HTTP_PORT:-4173}"
 
 API_PORT="${API_PORT:-8081}"
 STREAM_PORT="${STREAM_PORT:-8080}"
+GALLERY_PORT="${GALLERY_PORT:-8082}"
 
 NGINX_BIN="$HOMEBREW_PREFIX/bin/nginx"
 MIME_TYPES="$HOMEBREW_PREFIX/etc/nginx/mime.types"
@@ -150,6 +151,7 @@ cat << CONF_MID
 
     upstream witsaba_api    { server 127.0.0.1:$API_PORT; }
     upstream witsaba_stream { server 127.0.0.1:$STREAM_PORT; }
+    upstream witsaba_gallery { server 127.0.0.1:$GALLERY_PORT; }
 
     server {
         listen $LISTEN_PORT default_server;
@@ -158,6 +160,28 @@ cat << CONF_MID
         root $NGINX_HTML;
         index index.html;
         charset utf-8;
+
+        # --- gallery API -> workers -------------------------------------------
+        # The workers service owns the capture archive, so it also owns the
+        # gallery: listing days, serving a photo, and removing one.
+        #
+        # This MUST be a longer prefix than the /api/ block below, because
+        # nginx routes by LONGEST matching prefix, not by file order. A
+        # single location /api/ rule would send every gallery request to
+        # messaging-core and answer 404.
+        location /api/gallery/ {
+            proxy_pass http://witsaba_gallery;
+            proxy_http_version 1.1;
+            proxy_set_header Host \$host;
+            proxy_set_header X-Real-IP \$remote_addr;
+            proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto \$scheme;
+            proxy_connect_timeout 5s;
+            # Thumbnails are generated on first request, which is a decode
+            # plus an encode. Give it headroom over the API's 30s.
+            proxy_read_timeout 30s;
+            proxy_buffering off;
+        }
 
         # --- REST API -> messaging-core -------------------------------------
         location /api/ {
