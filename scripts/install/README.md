@@ -78,6 +78,7 @@ nginx serves the files and reverse-proxies the backend:
 ```
 /            -> files in ~/.witsaba/nginx/html
 /api/*       -> 127.0.0.1:8081   messaging-core REST
+/api/gallery/* -> 127.0.0.1:8082  workers gallery (longest prefix wins)
 /stream/*    -> 127.0.0.1:8080   messaging-core WebSocket gateway
 ```
 
@@ -151,7 +152,18 @@ systemctl --user restart witsaba-messaging-core
 systemctl --user reload witsaba-nginx      # after editing nginx.conf
 
 curl http://localhost:4173/api/devices/active
+curl http://localhost:4173/api/gallery/days
 ```
+
+The gallery page is at `http://<pi-address>:4173/gallery` — reachable from a
+phone on the same network, because nginx listens on all interfaces and is
+the only LAN-facing door. The `workers` gallery listener stays bound to
+`127.0.0.1`. Set `GALLERY_PORT` and `GALLERY_BIND` in `~/.witsaba/witsaba.env`
+to change either, then `systemctl --user restart witsaba-workers` and
+`systemctl --user reload witsaba-nginx`.
+
+Removing a photo from the gallery is permanent and has no undo. The worker
+captures every 15 minutes from each camera that answered recently.
 
 Services start at boot because `loginctl enable-linger` is set. Without it the
 user manager is not started at boot and nothing here runs unattended:

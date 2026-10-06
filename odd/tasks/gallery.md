@@ -167,6 +167,32 @@ On-demand thumb generation with atomic cache writes. `DELETE`
 with strict validation. Handle the ENOENT race between listing and
 deleting. Test unremovable files and symlink escapes.
 
+**Status: done.** Commit `be39567` —
+`feat(gallery): thumbnail cache and permanent delete`.
+
+Evidence: 37 tests in `internal/infrastructure/httpserver`, whole
+`workers` suite green under `-count=1`, `go vet` and `go build` clean.
+
+Thumbnails are 320px wide, cached at `~/.witsaba/thumbs/<date>/<name>.jpg`,
+derived as a sibling of the capture archive. The derivation is load-bearing:
+the unit sets `ProtectHome=read-only` with `ReadWritePaths=$HOME/.witsaba`,
+so a cache elsewhere under `$HOME` would be denied at write time. Standard
+library only — `image/jpeg` decodes and the downscale is a box filter, so no
+dependency was added. Box boundaries use integer arithmetic; float rounding
+there produces a visible one-pixel seam.
+
+`TestThumbnail_CorruptSourceLeavesNoCacheEntry` guards a cache-poisoning trap:
+a corrupt capture must leave no entry behind, or every later request serves
+that broken file. `TestThumbnail_ConcurrentGetsAreSafe` covers the same
+torn-read hazard W1 fixed on the capture side.
+
+Deletion reuses `resolveCapture`, so it carries both gates. Deleting a photo
+also drops its cached thumbnail — a thumbnail that outlives its photo is a
+photo that is still reachable. Deletion deliberately does **not** live on
+`Storage`: a `Storage.Remove(day, name)` could only re-validate the two
+components and would have no containment check, putting a weaker gate beside a
+stronger one.
+
 ### W5 — the gallery page
 `gallery.html` plus the nav link in `index.html`, `devices.html` and
 `stream.html`. Week strip, day grid, inline delete confirmation. Reuse
@@ -177,6 +203,33 @@ tokens only; dark mode, `prefers-reduced-motion`, focus-visible rings,
 ### W6 — nginx, systemd, docs
 Third upstream and `location /api/gallery/`. `ReadWritePaths` for the
 thumb cache. Update this document and `frontend/web_ui/README.md`.
+
+**Status: W5 and W6 both committed.** W5 `1e59107`
+`feat(web_ui): gallery page with week strip and inline delete`; W6 wires
+nginx, `witsaba.env`, and the docs.
+
+`api()` gained `options.method` and now resolves `204` to `null`. It
+previously always issued a GET and always called `res.json()`, so neither the
+DELETE verb nor the delete route's 204 response was reachable.
+
+**Verification is weaker here and is stated as such.** There is no front-end
+test runner in this repo. What was actually run: `node --check` on the shared
+helper and the page's inline script, an HTML tag-balance pass, undefined-CSS
+token detection, and direct execution of the calendar helpers — 15 assertions
+covering the year boundary and a DST week, where off-by-one errors live. All
+passed. **The page has not been loaded in a browser and has not been exercised
+through nginx.**
+
+`test-nginx-config.sh` gained four assertions: a longer-prefix
+`location /api/gallery/`, the `witsaba_gallery` upstream, that upstream being
+loopback-bound, and `gallery.html` present in the document root. The live layer
+skips without a running install, so those four are unproven until run on the
+Pi. `bash -n` passes on every install script.
+
+No `ReadWritePaths` change was needed: `ReadWritePaths=$INSTALL_DIR` already
+covers `~/.witsaba/thumbs`, because `INSTALL_DIR=$HOME/.witsaba`. An earlier
+note in this document predicted a systemd change here; that prediction was
+wrong and the finding is what drove the cache-root derivation in W4.
 
 ## Verification
 
