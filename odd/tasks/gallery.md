@@ -1,0 +1,165 @@
+# Feature: gallery — browse, filter and remove surveillance photos
+
+## Goal
+
+Give the operator a fast way to see what the cameras captured on a given
+day, and to remove photos they do not want kept. A week strip sits above
+a day view; the selected day's photos appear as a grid of thumbnails. A
+photo is removed permanently after an inline confirmation.
+
+Scope is the historical JPEG archive only. Live viewing stays on
+`/stream` and is not touched.
+
+## Starting point
+
+This is a from-scratch build on `main` @ `0d9e9ba`. No earlier gallery
+attempt is carried over, including its endpoint names and file layout.
+
+## What exists today (explored, verified)
+
+- `services/workers/internal/jobs/surveillance/storage.go` owns the
+  on-disk layout. It is **write-only**: `NewStorage`, `PathFor`,
+  `EnsureDayDir`, `WriteFile`. There is no read, list or delete.
+- The filesystem is the index. No database table, no manifest.
+- Capture interval is 15 min (`SURVEILLANCE_INTERVAL_MINUTES`), so
+  **96 photos per camera per day**; ~8 600 per month at three cameras.
+- `workers` has **no HTTP server at all** — it is a background job host.
+- `messaging-core` owns both HTTP surfaces: stdlib `ServeMux` with
+  `GET /api/devices/active` on `API_PORT` (8081), and a gin server with
+  `/healthz` and `/stream/:mac` on `STREAM_PORT` (8080).
+- nginx routes all of `/api/` to messaging-core and has exactly two
+  upstreams (`scripts/install/13-nginx.sh:151-152`).
+- Frontend is hand-edited HTML/CSS/JS, no framework, no build step.
+  Reusable helpers: `witsaba.api()`, `witsaba.el()`, `showState()`,
+  `onVisible()`. `el()` uses `textContent` only, never `innerHTML`, so
+  LAN-supplied strings cannot inject markup.
+- `try_files $uri $uri.html $uri/ =404` means a new page needs no nginx
+  config of its own.
+
+## Design decisions (locked)
+
+| Decision | Choice | Rationale |
+| --- | --- | --- |
+| API home | **`workers` gains an HTTP server** on `GALLERY_PORT` | The surveillance job already owns the capture root; read and delete belong beside the writer. messaging-core serving a directory it has nothing to do with is worse than one new upstream. |
+| nginx routing | `location /api/gallery/` ahead of `location /api/` | nginx matches longest prefix first, so only the gallery subtree moves. Every other `/api/` route is untouched. |
+| Deletion | **Permanent, inline confirm on the tile** | No modal: `DESIGN.md:205` refuses modals as a first thought. The tile flips to `Remove` → `Confirm remove` / `Cancel` in place. |
+| Calendar | **Week strip above a day view** | Seven cells with weekday, date and photo count; a stepper moves beyond the current week. |
+| Thumbnails | **On-disk cache** under `~/.witsaba/thumbs/<date>/<name>.jpg` | Regenerating per request makes every revisit re-decode on a Pi. Costs disk and one generation pass per new photo. |
+| Cameras | **All cameras mixed**, newest first, chip on each tile | Simplest model and the usual reason to want a gallery. |
+| Index | **Filesystem only** — one `os.ReadDir` per day | No schema, no migration, no manifest to corrupt. |
+| Pagination | **None** | A day is bounded at ~96 photos per camera. Pagination would add surface for no gain. |
+
+## Endpoint surface
+
+```
+GET    /api/gallery/days?from=&to=    -> [{date, count}]      week strip
+GET    /api/gallery/day?date=         -> [{name, mac, time, bytes}]
+GET    /api/gallery/img?date=&name=   -> image/jpeg           original
+GET    /api/gallery/thumb?date=&name= -> image/jpeg           generated + cached
+DELETE /api/gallery/photo?date=&name= -> 204                  permanent
+```
+
+## Security requirements (not optional)
+
+Remote-controlled filesystem deletion is the risk in this feature. Before
+either parameter reaches a path:
+
+- `date` must match `^\d{4}-\d{2}-\d{2}$`.
+- `name` must match `^\d{2}-\d{2}-\d{2}_[0-9a-f]{12}\.jpg$`.
+- The joined path must resolve, after `filepath.Clean`, to a path still
+  inside the capture root.
+- Symlinks under the capture root must not be followed out of it.
+
+Tests must attempt `../../.ssh/authorized_keys`, an absolute path, a
+NUL byte, a crafted symlink, and a name with a valid-looking prefix but
+trailing junk.
+
+## Correctness defect found during exploration (fix in W1)
+
+`services/workers/internal/jobs/surveillance/storage.go:15-17` documents
+that `os.WriteFile` *"atomically replaces the destination"*. That is
+false. `os.WriteFile` opens `O_TRUNC` and writes in place; there is no
+temp file and no rename, and the stdlib documents no such atomicity.
+
+It is latent today because nothing reads those files concurrently. Once
+the gallery polls for new photos it becomes a real torn-read bug: an
+`<img>` can receive a truncated JPEG. W1 replaces the write with
+temp-file + `rename`, and corrects the comment. The thumbnail writer in
+W4 uses the same pattern from day one.
+
+## Carried-over lesson
+
+An earlier gallery attempt declared `cameras` as both `int` and
+`string[]` under one JSON tag. `encoding/json` silently dropped **both**
+fields and the UI just looked empty with no error. Any summary/detail
+type pair here gets a test asserting the field actually survives
+marshalling.
+
+## Tasks
+
+### W1 — make capture writes atomic, and fix the false comment
+`storage.go`: write to a temp file in the same directory, `fsync`, then
+`rename`. Correct the doc comment. Test that a concurrent reader never
+observes a partial file.
+
+**Status: done.** Commit `2c6cb92` —
+`fix(surveillance): write captures atomically, correcting a false comment`.
+
+Evidence: RED observed first — `TestStorage_WriteFile_ReplacesAtomically`
+failed with `held reader saw "second-image-bytes-clearly-longer-than-the-first"
+after rewrite, want "first-image-bytes" — write was not atomic`. After the
+change the surveillance package and the whole `workers` suite pass, and
+`go vet ./...` is clean.
+
+How the test proves it: it opens a read handle on the destination, rewrites
+the file, then asserts the held handle still reads the complete original
+content. That is precisely what the gallery does when it serves a photo the
+worker is rewriting. Deterministic — no goroutines, no sleeps, no flakiness.
+`TestStorage_WriteFile_LeavesNoTempFiles` additionally pins that atomic
+writes do not leak temp files into the day directory the gallery lists.
+
+### W2 — the read side of `Storage`
+`ListDays` and `ListPhotos`, reusing the existing layout knowledge and
+`normalizeMAC`. `ListPhotos` returns name, MAC, capture time and byte
+size. Tests with `t.TempDir()`, `t.Parallel()`, plain stdlib
+assertions — matching the existing conventions in `storage_test.go`.
+
+### W3 — HTTP server in `workers`, gallery read endpoints
+New `internal/infrastructure/httpserver`. `GET days`, `GET day`,
+`GET img`. Path validation with the hostile-input tests above.
+`GALLERY_PORT` config (default 8082). Wire into `cmd/workers/main.go`.
+
+### W4 — thumbnails and deletion
+On-demand thumb generation with atomic cache writes. `DELETE`
+with strict validation. Handle the ENOENT race between listing and
+deleting. Test unremovable files and symlink escapes.
+
+### W5 — the gallery page
+`gallery.html` plus the nav link in `index.html`, `devices.html` and
+`stream.html`. Week strip, day grid, inline delete confirmation. Reuse
+`witsaba.api`, `witsaba.el`, `showState`, `onVisible`. Existing CSS
+tokens only; dark mode, `prefers-reduced-motion`, focus-visible rings,
+40px tap targets, icon+label status, specific empty states.
+
+### W6 — nginx, systemd, docs
+Third upstream and `location /api/gallery/`. `ReadWritePaths` for the
+thumb cache. Update this document and `frontend/web_ui/README.md`.
+
+## Verification
+
+Go tests are deterministic and apply to W1-W4: `cd services/workers &&
+go test ./...`. For W5 there is **no front-end test runner** — per
+`PRODUCT.md` there is no toolchain in the serving path — so verification
+is structural plus manual: nginx config test, page load, dark mode,
+keyboard traversal, and the delete round trip. W6 runs
+`scripts/install/test-nginx-config.sh`. No lifecycle evidence will be
+invented for the parts that cannot be run here.
+
+## Anti-goals
+
+- No Docker work. The operator target is native systemd/nginx.
+- No build step, bundler, framework or third-party JS.
+- No sparklines, progress rings, gradients, glass, blur, emoji icons or
+  display fonts.
+- No modal dialogs.
+- No database table or manifest.
