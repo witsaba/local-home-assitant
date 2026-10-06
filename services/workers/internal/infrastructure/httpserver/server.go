@@ -50,26 +50,36 @@ const (
 	RouteDays   = "/api/gallery/days"
 	RouteDay    = "/api/gallery/day"
 	RouteImage  = "/api/gallery/img"
+	RouteThumb  = "/api/gallery/thumb"
+	RoutePhoto  = "/api/gallery/photo"
 )
 
 // Handler serves the gallery API.
 type Handler struct {
-	store surveillance.Storage
-	log   *zap.Logger
-	mux   *http.ServeMux
+	store  surveillance.Storage
+	thumbs *thumbnailer
+	log    *zap.Logger
+	mux    *http.ServeMux
 }
 
 // NewHandler returns a Handler serving the gallery for the capture root.
+//
+// The thumbnail cache is derived as a sibling "thumbs" directory of the
+// capture root, which keeps it under $HOME/.witsaba where the systemd
+// unit allows writes.
 func NewHandler(root string, log *zap.Logger) *Handler {
 	h := &Handler{
-		store: surveillance.NewStorage(root),
-		log:   log,
-		mux:   http.NewServeMux(),
+		store:  surveillance.NewStorage(root),
+		thumbs: newThumbnailer(defaultThumbRoot(root), thumbnailWidth),
+		log:    log,
+		mux:    http.NewServeMux(),
 	}
 	h.mux.HandleFunc("GET "+RouteHealth, h.healthz)
 	h.mux.HandleFunc("GET "+RouteDays, h.listDays)
 	h.mux.HandleFunc("GET "+RouteDay, h.listDay)
 	h.mux.HandleFunc("GET "+RouteImage, h.serveImage)
+	h.mux.HandleFunc("GET "+RouteThumb, h.serveThumb)
+	h.mux.HandleFunc("DELETE "+RoutePhoto, h.deletePhoto)
 	return h
 }
 
@@ -200,14 +210,120 @@ func (h *Handler) serveImage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	f, err := os.Open(path)
+	h.serveFile(w, r, path)
+}
+
+// serveThumb handles GET /api/gallery/thumb?date=&name=.
+//
+// Serves the cached thumbnail, generating it from the original on first
+// request. A photo whose original is missing or corrupt answers 404
+// rather than serving a broken cache entry.
+func (h *Handler) serveThumb(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	day, name := q.Get("date"), q.Get("name")
+
+	srcPath, err := resolveCapture(h.store.Root, day, name)
+	switch {
+	case errors.Is(err, errBadDay), errors.Is(err, errBadName):
+		writeError(w, http.StatusBadRequest,
+			"date must be YYYY-MM-DD and name must be HH-MM-SS_<12 hex>.jpg")
+		return
+	case errors.Is(err, errOutsideRoot):
+		h.log.Warn("gallery: refused a thumb path resolving outside the capture root",
+			zap.String("date", day), zap.String("name", name))
+		writeError(w, http.StatusForbidden, "refused")
+		return
+	case errors.Is(err, fs.ErrNotExist):
+		writeError(w, http.StatusNotFound, "no such photo")
+		return
+	case err != nil:
+		h.log.Error("gallery: thumb resolve failed", zap.Error(err))
+		writeError(w, http.StatusInternalServerError, "could not read that photo")
+		return
+	}
+
+	cachePath, err := h.thumbs.get(day, name, srcPath)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			writeError(w, http.StatusNotFound, "no such photo")
 			return
 		}
-		h.log.Error("gallery: open failed", zap.String("path", path), zap.Error(err))
-		writeError(w, http.StatusInternalServerError, "could not read that photo")
+		h.log.Warn("gallery: thumbnail generation failed",
+			zap.String("date", day), zap.String("name", name), zap.Error(err))
+		// Fall back to the original so the operator still sees the
+		// photo; a missing thumbnail is never worth an empty tile.
+		h.serveFile(w, r, srcPath)
+		return
+	}
+
+	h.serveFile(w, r, cachePath)
+}
+
+// deletePhoto handles DELETE /api/gallery/photo?date=&name=.
+//
+// This is the only destructive route in the stack and it is permanent,
+// so it is gated exactly as serveImage is: both components must match
+// the capture patterns, and the resolved path must still sit under the
+// resolved root. That second gate is what stops a symlink planted in
+// the archive from turning DELETE into "delete whatever I point at".
+//
+// The deletion happens HERE rather than as a Storage method on purpose.
+// A Storage.Remove(day, name) could only re-validate the components and
+// would have no containment check, which would be a weaker gate sitting
+// next to a stronger one. Keeping one code path means there is exactly
+// one way to delete a file.
+func (h *Handler) deletePhoto(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	day, name := q.Get("date"), q.Get("name")
+
+	path, err := resolveCapture(h.store.Root, day, name)
+	switch {
+	case errors.Is(err, errBadDay), errors.Is(err, errBadName):
+		writeError(w, http.StatusBadRequest,
+			"date must be YYYY-MM-DD and name must be HH-MM-SS_<12 hex>.jpg")
+		return
+	case errors.Is(err, errOutsideRoot):
+		h.log.Warn("gallery: refused a delete resolving outside the capture root",
+			zap.String("date", day), zap.String("name", name))
+		writeError(w, http.StatusForbidden, "refused")
+		return
+	case errors.Is(err, fs.ErrNotExist):
+		writeError(w, http.StatusNotFound, "no such photo")
+		return
+	case err != nil:
+		h.log.Error("gallery: delete resolve failed", zap.Error(err))
+		writeError(w, http.StatusInternalServerError, "could not remove that photo")
+		return
+	}
+
+	if err := os.Remove(path); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			writeError(w, http.StatusNotFound, "no such photo")
+			return
+		}
+		h.log.Error("gallery: remove failed", zap.String("path", path), zap.Error(err))
+		writeError(w, http.StatusInternalServerError, "could not remove that photo")
+		return
+	}
+
+	// A thumbnail that outlives its photo is a photo that is still
+	// reachable, so it goes with it.
+	if err := h.thumbs.drop(day, name); err != nil {
+		h.log.Warn("gallery: could not drop the cached thumbnail",
+			zap.String("date", day), zap.String("name", name), zap.Error(err))
+	}
+
+	h.log.Info("gallery: photo removed",
+		zap.String("date", day), zap.String("name", name))
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// serveFile writes a JPEG from disk with revalidation headers.
+func (h *Handler) serveFile(w http.ResponseWriter, r *http.Request, path string) {
+	f, err := os.Open(path)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "no such photo")
 		return
 	}
 	defer f.Close()

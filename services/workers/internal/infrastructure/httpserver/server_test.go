@@ -2,8 +2,12 @@
 package httpserver
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"image"
+	_ "image/jpeg"
 	"io"
 	"net"
 	"net/http"
@@ -484,5 +488,253 @@ func TestServe_BindsServesAndDrains(t *testing.T) {
 
 	if _, err := http.Get(base + RouteHealth); err == nil {
 		t.Error("listener still answering after shutdown")
+	}
+}
+
+// --- /api/gallery/thumb -----------------------------------------------
+
+func TestHandler_Thumb_ServesAJpeg(t *testing.T) {
+	t.Parallel()
+
+	h, _ := newJPEGHanler(t, map[string]int{"2026-10-06": 1})
+	rec := do(t, h, http.MethodGet, "/api/gallery/thumb?date=2026-10-06&name=12-00-00_aabbccddeeff.jpg")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %q)", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Content-Type"); got != "image/jpeg" {
+		t.Errorf("Content-Type = %q, want image/jpeg", got)
+	}
+	if _, _, err := image.DecodeConfig(bytes.NewReader(rec.Body.Bytes())); err != nil {
+		t.Errorf("thumb body is not a decodable image: %v", err)
+	}
+}
+
+// The thumbnail cache is a second filesystem surface and must be gated
+// exactly as the image path is.
+func TestHandler_Thumb_RejectsHostileNames(t *testing.T) {
+	t.Parallel()
+
+	h, _ := newJPEGHanler(t, map[string]int{"2026-10-06": 1})
+	cases := []string{
+		"date=2026-10-06&name=../../../../.ssh/authorized_keys",
+		"date=../..&name=12-00-00_aabbccddeeff.jpg",
+		"date=2026-10-06&name=/etc/passwd",
+		"date=2026-10-06&name=12-00-00_aabbccddeeff.jpg.bak",
+		"date=2026-10-06",
+		"name=12-00-00_aabbccddeeff.jpg",
+	}
+	for _, q := range cases {
+		rec := do(t, h, http.MethodGet, "/api/gallery/thumb?"+q)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("%q: status = %d, want 400 (body %q)", q, rec.Code, rec.Body.String())
+		}
+	}
+}
+
+func TestHandler_Thumb_MissingIs404(t *testing.T) {
+	t.Parallel()
+
+	h, _ := newJPEGHanler(t, map[string]int{"2026-10-06": 1})
+	rec := do(t, h, http.MethodGet, "/api/gallery/thumb?date=2026-10-06&name=13-45-00_112233445566.jpg")
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", rec.Code)
+	}
+}
+
+// --- DELETE /api/gallery/photo ----------------------------------------
+
+func TestHandler_Delete_RemovesThePhoto(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	h := NewHandler(root, zap.NewNop())
+	seedJPEG(t, root, "2026-10-06", "12-00-00_aabbccddeeff.jpg")
+
+	rec := do(t, h, http.MethodDelete, "/api/gallery/photo?date=2026-10-06&name=12-00-00_aabbccddeeff.jpg")
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204 (body %q)", rec.Code, rec.Body.String())
+	}
+	if _, err := os.Stat(filepath.Join(root, "2026-10-06", "12-00-00_aabbccddeeff.jpg")); err == nil {
+		t.Error("photo still on disk after DELETE")
+	}
+}
+
+// Deleting a photo must also drop its cached thumbnail, or the thumb
+// stays servable after the original is gone.
+func TestHandler_Delete_AlsoDropsTheCachedThumb(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	cache := t.TempDir()
+	h := NewHandler(root, zap.NewNop())
+	h.thumbs = newThumbnailer(cache, thumbnailWidth)
+	seedJPEG(t, root, "2026-10-06", "12-00-00_aabbccddeeff.jpg")
+
+	// Warm the cache first.
+	if _, err := h.thumbs.get("2026-10-06", "12-00-00_aabbccddeeff.jpg",
+		filepath.Join(root, "2026-10-06", "12-00-00_aabbccddeeff.jpg")); err != nil {
+		t.Fatalf("warm cache: %v", err)
+	}
+	thumb := filepath.Join(cache, "2026-10-06", "12-00-00_aabbccddeeff.jpg")
+	if _, err := os.Stat(thumb); err != nil {
+		t.Fatalf("thumb was not cached: %v", err)
+	}
+
+	rec := do(t, h, http.MethodDelete, "/api/gallery/photo?date=2026-10-06&name=12-00-00_aabbccddeeff.jpg")
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", rec.Code)
+	}
+	if _, err := os.Stat(thumb); err == nil {
+		t.Error("thumbnail survived the delete and is still servable")
+	}
+}
+
+// This is the highest-consequence test in the feature.
+func TestHandler_Delete_RejectsHostileNames(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	h := NewHandler(root, zap.NewNop())
+
+	// A file that MUST survive every attempt below.
+	victimDir := filepath.Join(root, "keep")
+	if err := os.MkdirAll(victimDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	victim := filepath.Join(victimDir, "precious.txt")
+	if err := os.WriteFile(victim, []byte("PRECIOUS"), 0o644); err != nil {
+		t.Fatalf("write victim: %v", err)
+	}
+	outside := filepath.Join(t.TempDir(), "outside.txt")
+	if err := os.WriteFile(outside, []byte("OUTSIDE"), 0o644); err != nil {
+		t.Fatalf("write outside: %v", err)
+	}
+
+	cases := []string{
+		"date=2026-10-06&name=../keep/precious.txt",
+		"date=..&name=keep/precious.txt",
+		"date=2026-10-06&name=" + outside,
+		"date=../..&name=12-00-00_aabbccddeeff.jpg",
+		"date=2026-10-06&name=keep%2Fprecious.txt",
+		"date=2026-10-06&name=12-00-00_aabbccddeeff.jpg.bak",
+		"date=2026-10-06",
+		"name=12-00-00_aabbccddeeff.jpg",
+	}
+	for _, q := range cases {
+		rec := do(t, h, http.MethodDelete, "/api/gallery/photo?"+q)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("DELETE %q: status = %d, want 400 (body %q)", q, rec.Code, rec.Body.String())
+		}
+	}
+
+	if got, err := os.ReadFile(victim); err != nil || string(got) != "PRECIOUS" {
+		t.Errorf("the protected file was modified: %q %v", got, err)
+	}
+	if _, err := os.Stat(outside); err != nil {
+		t.Errorf("a file outside the capture root was deleted: %v", err)
+	}
+}
+
+// A symlink inside the archive must not become a delete-what-I-point-at
+// primitive for a filesystem attacker.
+func TestHandler_Delete_RefusesSymlinkTarget(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	h := NewHandler(root, zap.NewNop())
+	seedJPEG(t, root, "2026-10-06", "12-00-00_aabbccddeeff.jpg")
+
+	outside := filepath.Join(t.TempDir(), "outside.txt")
+	if err := os.WriteFile(outside, []byte("OUTSIDE"), 0o644); err != nil {
+		t.Fatalf("write outside: %v", err)
+	}
+	link := filepath.Join(root, "2026-10-06", "13-00-00_112233445566.jpg")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	rec := do(t, h, http.MethodDelete, "/api/gallery/photo?date=2026-10-06&name=13-00-00_112233445566.jpg")
+	if rec.Code == http.StatusNoContent {
+		t.Error("DELETE followed a symlink out of the capture root")
+	}
+	if _, err := os.Stat(outside); err != nil {
+		t.Errorf("the symlink target was deleted: %v", err)
+	}
+}
+
+func TestHandler_Delete_MissingIs404(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	h := NewHandler(root, zap.NewNop())
+	rec := do(t, h, http.MethodDelete, "/api/gallery/photo?date=2026-10-06&name=12-00-00_aabbccddeeff.jpg")
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", rec.Code)
+	}
+}
+
+// Deleting the last photo of a day leaves the empty directory behind.
+func TestHandler_Delete_EmptyDayIsNotListed(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	h := NewHandler(root, zap.NewNop())
+	seedJPEG(t, root, "2026-10-05", "12-00-00_aabbccddeeff.jpg")
+	seedJPEG(t, root, "2026-10-06", "12-00-00_aabbccddeeff.jpg")
+
+	if rec := do(t, h, http.MethodDelete, "/api/gallery/photo?date=2026-10-05&name=12-00-00_aabbccddeeff.jpg"); rec.Code != http.StatusNoContent {
+		t.Fatalf("delete status = %d, want 204", rec.Code)
+	}
+
+	rec := do(t, h, http.MethodGet, "/api/gallery/days?from=2026-10-05&to=2026-10-06")
+	var got []dayCount
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	for _, d := range got {
+		if d.Date == "2026-10-05" && d.Count != 0 {
+			t.Errorf("2026-10-05 count = %d, want 0", d.Count)
+		}
+	}
+}
+
+// Deleting is a DELETE method; the read routes must refuse it.
+func TestHandler_RejectsGetOnDeleteRoute(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	h := NewHandler(root, zap.NewNop())
+	rec := do(t, h, http.MethodGet, "/api/gallery/photo?date=2026-10-06&name=12-00-00_aabbccddeeff.jpg")
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("GET on the delete route: status = %d, want 405", rec.Code)
+	}
+}
+
+// newJPEGHanler returns a Handler whose captures are real, decodable
+// JPEGs, so the thumbnail path can be exercised end to end.
+func newJPEGHanler(t *testing.T, days map[string]int) (*Handler, string) {
+	t.Helper()
+
+	root := t.TempDir()
+	for day, n := range days {
+		for i := 0; i < n; i++ {
+			name := fmt.Sprintf("%02d:00:00_aabbccddeeff.jpg", 12+i)
+			seedJPEG(t, root, day, strings.ReplaceAll(name, ":", "-"))
+		}
+	}
+	return NewHandler(root, zap.NewNop()), root
+}
+
+// seedJPEG plants one real JPEG capture.
+func seedJPEG(t *testing.T, root, day, name string) {
+	t.Helper()
+
+	dir := filepath.Join(root, day)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", dir, err)
+	}
+	body := makeJPEG(t, 800, 600)
+	if err := os.WriteFile(filepath.Join(dir, name), body, 0o644); err != nil {
+		t.Fatalf("write %s: %v", name, err)
 	}
 }
