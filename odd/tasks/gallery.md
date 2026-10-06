@@ -124,6 +124,39 @@ writes do not leak temp files into the day directory the gallery lists.
 size. Tests with `t.TempDir()`, `t.Parallel()`, plain stdlib
 assertions — matching the existing conventions in `storage_test.go`.
 
+**Status: done.** Commit `c76ae1d` —
+`feat(surveillance): read side of Storage for the gallery`.
+
+Evidence: RED first — the package failed to build with
+`s.ListDays undefined (type Storage has no field or method ListDays)`
+and the same for `ListPhotos`. After the change the surveillance package
+reports **48 passing, 0 failing**, the whole `workers` suite is green
+under `-count=1`, and `go vet ./...` is clean.
+
+What the tests pin:
+
+- `ListDays` returns ISO dates sorted ascending, ignoring directories
+  that are not capture days and a stray file at the root.
+- **Empty is empty, never nil.** `ListDays_EmptyIsEmptySliceNotNil` and
+  `ListPhotos_EmptyDayIsEmptySliceNotNil` exist because the previous
+  attempt answered `null` for a real-but-empty archive and the calendar
+  rendered blank with no error anywhere.
+- A missing root, and a day with no directory, are empty rather than
+  errors — the operator should see "no photos captured on this day",
+  not a failure page.
+- **`ListDays_SkipsDaysWithNoCapturesLeft`**: deleting the last photo of
+  a day leaves an empty directory. The calendar must not then show a
+  permanent blank cell for it.
+- **`ListPhotos_SkipsTempFilesAndJunk`**: the `.<name>.tmp-*` file that
+  W1's atomic write creates mid-flight is skipped, along with a
+  `.bak`, a `notes.txt`, a non-hex MAC, and a subdirectory.
+- A file vanishing between the directory read and the `Info` call is
+  skipped, not fatal — that is the delete/retention race.
+
+`ValidCaptureDay` and `ValidCaptureName` are exported now, because W3 and
+W4 need them to reject a request-supplied day and name before either is
+ever joined onto the capture root.
+
 ### W3 — HTTP server in `workers`, gallery read endpoints
 New `internal/infrastructure/httpserver`. `GET days`, `GET day`,
 `GET img`. Path validation with the hostile-input tests above.
