@@ -3,6 +3,7 @@ package surveillance
 
 import (
 	"errors"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -234,5 +235,90 @@ func TestStorage_EnsureDayDir_NoSuchRootIsRealError(t *testing.T) {
 		// We don't strictly require a typed error — just confirm
 		// it is not nil and the underlying syscall error is preserved.
 		_ = err
+	}
+}
+
+// TestStorage_WriteFile_ReplacesAtomically is the test that guards the
+// gallery. It pins the observable meaning of "atomic replacement": a
+// reader that already holds a handle on the destination keeps seeing the
+// previous, COMPLETE image across a rewrite. That is precisely what the
+// gallery does when it serves a photo that the capture worker is
+// rewriting underneath it.
+//
+// A truncate-and-write in place makes the held handle observe empty or
+// partial bytes instead. The test is deterministic — no goroutines, no
+// sleeps, no flakiness.
+func TestStorage_WriteFile_ReplacesAtomically(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	s := NewStorage(root)
+	now := time.Date(2026, 9, 30, 12, 0, 0, 0, time.Local)
+	path := s.PathFor(now, "aabbccddeeff")
+
+	original := []byte("first-image-bytes")
+	replacement := []byte("second-image-bytes-clearly-longer-than-the-first")
+
+	if _, err := s.WriteFile(path, original); err != nil {
+		t.Fatalf("first write: %v", err)
+	}
+
+	// Hold a read handle open across the rewrite.
+	held, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("open held handle: %v", err)
+	}
+	defer held.Close()
+
+	if _, err := s.WriteFile(path, replacement); err != nil {
+		t.Fatalf("second write: %v", err)
+	}
+
+	seen, err := io.ReadAll(held)
+	if err != nil {
+		t.Fatalf("read held handle: %v", err)
+	}
+	if string(seen) != string(original) {
+		t.Errorf("held reader saw %q after rewrite, want %q — write was not atomic",
+			seen, original)
+	}
+
+	// And a reader arriving fresh must see the new content, complete.
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("readback: %v", err)
+	}
+	if string(got) != string(replacement) {
+		t.Errorf("readback = %q, want %q", got, replacement)
+	}
+}
+
+// TestStorage_WriteFile_LeavesNoTempFiles guards the cost of atomic
+// writes: the temp file must not survive a successful write, or the day
+// directory would accumulate junk that the gallery would then list.
+func TestStorage_WriteFile_LeavesNoTempFiles(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	s := NewStorage(root)
+	now := time.Date(2026, 9, 30, 12, 0, 0, 0, time.Local)
+
+	for _, mac := range []string{"aabbccddeeff", "112233445566"} {
+		if _, err := s.WriteFile(s.PathFor(now, mac), []byte("bytes")); err != nil {
+			t.Fatalf("WriteFile(%s): %v", mac, err)
+		}
+	}
+
+	entries, err := os.ReadDir(filepath.Join(root, "2026-09-30"))
+	if err != nil {
+		t.Fatalf("read day dir: %v", err)
+	}
+	if len(entries) != 2 {
+		var names []string
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		t.Errorf("day dir holds %d entries %v, want exactly 2 jpgs",
+			len(entries), names)
 	}
 }

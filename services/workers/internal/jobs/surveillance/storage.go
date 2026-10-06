@@ -18,11 +18,13 @@
 //
 // Idempotency: the directory is created with os.MkdirAll (so
 // restarting the worker does not error on existing dirs), and
-// the file write uses os.WriteFile which atomically replaces the
-// destination. Two ticks firing within the same second for the
-// same device would overwrite each other; in practice the
-// 15-minute interval prevents that, and a future caller can
-// guard against it by including the second or a counter.
+// the file write goes through writeFileAtomic, which writes a
+// temp file and renames it over the destination so a concurrent
+// reader never observes a half-written image. Two ticks firing
+// within the same second for the same device would overwrite
+// each other; in practice the 15-minute interval prevents that,
+// and a future caller can guard against it by including the
+// second or a counter.
 package surveillance
 
 import (
@@ -120,10 +122,74 @@ func (s Storage) WriteFile(path string, body []byte) (string, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", fmt.Errorf("WriteFile: mkdir %s: %w", dir, err)
 	}
-	if err := os.WriteFile(path, body, 0o644); err != nil {
+	if err := writeFileAtomic(path, body, 0o644); err != nil {
 		return "", fmt.Errorf("WriteFile: write %s: %w", path, err)
 	}
 	return path, nil
+}
+
+// writeFileAtomic writes body to path so that a concurrent reader ever
+// only ever sees either the complete previous file or the complete new
+// one, never a partially written image.
+//
+// The sequence: write to a temp file in the SAME directory (so the
+// rename stays inside one filesystem, which is what makes it atomic),
+// fsync the file so its bytes reach the disk, close it, rename it over
+// the destination, then fsync the directory so the rename is durable.
+//
+// os.WriteFile cannot be used here. It opens the destination with
+// O_TRUNC and writes in place, so a reader watching that file sees it
+// drop to zero length and then grow back to full. The gallery serves
+// these images straight from disk, so that window would hand a browser
+// a truncated JPEG. This replaces an earlier comment here that claimed
+// os.WriteFile was atomic; it is not, and the stdlib documents no such
+// guarantee.
+func writeFileAtomic(path string, body []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return fmt.Errorf("create temp: %w", err)
+	}
+	tmpName := tmp.Name()
+
+	// From here on, every failure path must not leave the temp file
+	// behind: a leftover would be picked up by the gallery listing.
+	discard := func() { _ = os.Remove(tmpName) }
+
+	if _, err := tmp.Write(body); err != nil {
+		tmp.Close()
+		discard()
+		return fmt.Errorf("write temp: %w", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		discard()
+		return fmt.Errorf("sync temp: %w", err)
+	}
+	// Close before the rename so the destination can never become
+	// visible without its data already flushed.
+	if err := tmp.Close(); err != nil {
+		discard()
+		return fmt.Errorf("close temp: %w", err)
+	}
+	// CreateTemp always makes 0600; the archive contract is 0644.
+	if err := os.Chmod(tmpName, perm); err != nil {
+		discard()
+		return fmt.Errorf("chmod temp: %w", err)
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		discard()
+		return fmt.Errorf("rename: %w", err)
+	}
+
+	// Best-effort durability for the rename itself. A failure here
+	// leaves the file contents correct, so it is not fatal.
+	if d, err := os.Open(dir); err == nil {
+		_ = d.Sync()
+		_ = d.Close()
+	}
+	return nil
 }
 
 // normalizeMAC strips common separators and lowercases. Returns
