@@ -30,8 +30,11 @@ package surveillance
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"strings"
 	"time"
 )
@@ -198,4 +201,176 @@ func normalizeMAC(mac string) string {
 	mac = strings.ToLower(strings.TrimSpace(mac))
 	r := strings.NewReplacer(":", "", "-", "", " ", "", ".", "")
 	return r.Replace(mac)
+}
+
+// --- read side ---------------------------------------------------------
+//
+// Everything above is the write path. Everything below is what the
+// gallery reads: which days exist, and which photos each day holds. The
+// filesystem stays the index — no manifest, no database row, nothing to
+// migrate and nothing to corrupt.
+
+// Photo is one captured image found on disk.
+//
+// Name is the on-disk filename. It is also what the gallery passes back
+// when it wants the image served or removed, so a file is always
+// addressed by exactly the string that was read out of the directory.
+// MAC and Time are parsed out of that same name rather than recomputed,
+// so they cannot disagree with what is on disk.
+type Photo struct {
+	Name  string
+	MAC   string
+	Time  time.Time
+	Bytes int64
+}
+
+const (
+	dayLayout         = "2006-01-02"
+	captureTimeLayout = "15-04-05"
+)
+
+// captureNameRE matches the exact shape of a capture filename:
+// "HH-MM-SS_<12 lowercase hex>.jpg", where the hex is the MAC written by
+// PathFor.
+//
+// This is the first line of defence for the HTTP layer, where the day
+// and the name arrive from a request. Anything that does not match is
+// not a capture: it must never be listed, served, or deleted. It is also
+// what keeps the ".<name>.tmp-*" file that writeFileAtomic creates
+// mid-write out of the gallery.
+var captureNameRE = regexp.MustCompile(`^([0-9]{2}-[0-9]{2}-[0-9]{2})_([0-9a-f]{12})\.jpg$`)
+
+// dayRE matches a capture day directory, "YYYY-MM-DD".
+var dayRE = regexp.MustCompile(`^[0-9]{4}-[0-9]{2}-[0-9]{2}$`)
+
+// ValidCaptureDay reports whether name is a capture day directory. The
+// HTTP layer uses this to reject a date parameter before it is ever
+// joined onto the capture root.
+func ValidCaptureDay(name string) bool { return dayRE.MatchString(name) }
+
+// ValidCaptureName reports whether name is a capture filename. The HTTP
+// layer uses this to reject a name parameter before it is ever joined
+// onto the capture root — this is what stops a traversal payload or a
+// crafted name from ever reaching the filesystem.
+func ValidCaptureName(name string) bool { return captureNameRE.MatchString(name) }
+
+// ListDays returns the capture days that still hold at least one photo,
+// oldest first.
+//
+// A root that does not exist yet — an archive that has never run, or a
+// directory that was moved — is reported as empty rather than as an
+// error, because the gallery needs a truthful empty calendar rather than
+// a failure page. A day directory left behind after its last photo was
+// deleted is skipped, so the calendar never grows a permanent blank
+// cell.
+//
+// ISO dates sort lexicographically, which is also chronological order.
+func (s Storage) ListDays() ([]string, error) {
+	days := []string{}
+
+	if strings.TrimSpace(s.Root) == "" {
+		return nil, errors.New("ListDays: empty root")
+	}
+
+	entries, err := os.ReadDir(s.Root)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return days, nil
+		}
+		return nil, fmt.Errorf("ListDays: read %s: %w", s.Root, err)
+	}
+
+	for _, e := range entries {
+		if !e.IsDir() || !ValidCaptureDay(e.Name()) {
+			continue
+		}
+		// One unreadable day must not empty the whole calendar.
+		photos, err := s.ListPhotos(mustParseDay(e.Name()))
+		if err != nil {
+			continue
+		}
+		if len(photos) > 0 {
+			days = append(days, e.Name())
+		}
+	}
+
+	sort.Strings(days)
+	return days, nil
+}
+
+// ListPhotos returns the photos captured on the given local day, newest
+// first — the order the operator expects when they open a day.
+//
+// Only filenames matching the capture pattern are returned. A temporary
+// file from an in-flight atomic write, a backup, and anything else that
+// is not a capture are skipped rather than reported as errors.
+//
+// A day with no directory is an empty day, not an error: navigating to
+// a date that was never captured should show "no photos captured on
+// this day", not a failure.
+func (s Storage) ListPhotos(day time.Time) ([]Photo, error) {
+	photos := []Photo{}
+
+	if strings.TrimSpace(s.Root) == "" {
+		return nil, errors.New("ListPhotos: empty root")
+	}
+
+	dir := s.dayDir(day)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return photos, nil
+		}
+		return nil, fmt.Errorf("ListPhotos: read %s: %w", dir, err)
+	}
+
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		m := captureNameRE.FindStringSubmatch(e.Name())
+		if m == nil {
+			continue
+		}
+
+		// A file can vanish between the directory read and the Info
+		// call — the gallery deleting it, or retention pruning it.
+		// Skip it rather than failing the whole day.
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+
+		when, err := time.ParseInLocation(
+			dayLayout+" "+captureTimeLayout,
+			day.Format(dayLayout)+" "+m[1],
+			time.Local,
+		)
+		if err != nil {
+			continue
+		}
+
+		photos = append(photos, Photo{
+			Name:  e.Name(),
+			MAC:   m[2],
+			Time:  when,
+			Bytes: info.Size(),
+		})
+	}
+
+	sort.Slice(photos, func(i, j int) bool {
+		return photos[i].Time.After(photos[j].Time)
+	})
+	return photos, nil
+}
+
+// mustParseDay turns a "YYYY-MM-DD" directory name that has already
+// matched dayRE into a time.Time. If it somehow fails, the zero time
+// simply matches no real photo.
+func mustParseDay(name string) time.Time {
+	t, err := time.ParseInLocation(dayLayout, name, time.Local)
+	if err != nil {
+		return time.Time{}
+	}
+	return t
 }

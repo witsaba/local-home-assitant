@@ -3,6 +3,7 @@ package surveillance
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -209,6 +210,260 @@ func TestStorage_PermissionsAreNotWorldWritable(t *testing.T) {
 	}
 	if dinfo.Mode().Perm()&0o002 != 0 {
 		t.Errorf("dir mode = %o, want no world-write (0o755)", dinfo.Mode().Perm())
+	}
+}
+
+// writeCapture plants one capture directly, bypassing WriteFile, so the
+// listing tests control the exact fixture set on disk.
+func writeCapture(t *testing.T, s Storage, day string, hh, mm, ss int, mac, body string) {
+	t.Helper()
+	dir := filepath.Join(s.Root, day)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", dir, err)
+	}
+	name := fmt.Sprintf("%02d-%02d-%02d_%s.jpg", hh, mm, ss, mac)
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+		t.Fatalf("write %s: %v", name, err)
+	}
+}
+
+func TestStorage_ListDays_ReturnsSortedDatesOnly(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	s := NewStorage(root)
+
+	for _, day := range []string{"2026-10-03", "2026-09-30", "2026-10-01"} {
+		writeCapture(t, s, day, 12, 0, 0, "aabbccddeeff", "x")
+	}
+	// Directories that are NOT capture days must be ignored, not listed.
+	for _, junk := range []string{"thumbs", ".tmp", "not-a-date", "2026-13-45x"} {
+		if err := os.MkdirAll(filepath.Join(root, junk), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", junk, err)
+		}
+	}
+	// A stray file at the root is not a day either.
+	if err := os.WriteFile(filepath.Join(root, "README"), []byte("x"), 0o644); err != nil {
+		t.Fatalf("write README: %v", err)
+	}
+
+	got, err := s.ListDays()
+	if err != nil {
+		t.Fatalf("ListDays: %v", err)
+	}
+	want := []string{"2026-09-30", "2026-10-01", "2026-10-03"}
+	if len(got) != len(want) {
+		t.Fatalf("ListDays = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("ListDays[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+// The previous gallery attempt shipped a days endpoint that answered
+// `null` for a real but empty archive, so the calendar rendered blank
+// with no error anywhere. An empty result must be an empty slice.
+func TestStorage_ListDays_EmptyIsEmptySliceNotNil(t *testing.T) {
+	t.Parallel()
+
+	s := NewStorage(t.TempDir())
+	got, err := s.ListDays()
+	if err != nil {
+		t.Fatalf("ListDays: %v", err)
+	}
+	if got == nil {
+		t.Fatal("ListDays = nil, want empty slice (it would marshal to JSON null)")
+	}
+	if len(got) != 0 {
+		t.Errorf("ListDays = %v, want empty", got)
+	}
+}
+
+func TestStorage_ListDays_MissingRootIsEmpty(t *testing.T) {
+	t.Parallel()
+
+	s := NewStorage(filepath.Join(t.TempDir(), "never-created"))
+	got, err := s.ListDays()
+	if err != nil {
+		t.Fatalf("ListDays on missing root: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("ListDays = %v, want empty", got)
+	}
+}
+
+func TestStorage_ListPhotos_ReturnsCaptureFields(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	s := NewStorage(root)
+	writeCapture(t, s, "2026-09-30", 21, 30, 45, "aabbccddeeff", "twelve-bytes")
+
+	day := time.Date(2026, 9, 30, 0, 0, 0, 0, time.Local)
+	photos, err := s.ListPhotos(day)
+	if err != nil {
+		t.Fatalf("ListPhotos: %v", err)
+	}
+	if len(photos) != 1 {
+		t.Fatalf("ListPhotos returned %d photos, want 1", len(photos))
+	}
+
+	p := photos[0]
+	if p.Name != "21-30-45_aabbccddeeff.jpg" {
+		t.Errorf("Name = %q, want %q", p.Name, "21-30-45_aabbccddeeff.jpg")
+	}
+	if p.MAC != "aabbccddeeff" {
+		t.Errorf("MAC = %q, want %q", p.MAC, "aabbccddeeff")
+	}
+	if got := p.Time.Format("15:04:05"); got != "21:30:45" {
+		t.Errorf("Time = %s, want 21:30:45", got)
+	}
+	if p.Bytes != int64(len("twelve-bytes")) {
+		t.Errorf("Bytes = %d, want %d", p.Bytes, len("twelve-bytes"))
+	}
+}
+
+func TestStorage_ListPhotos_NewestFirst(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	s := NewStorage(root)
+	writeCapture(t, s, "2026-09-30", 0, 15, 0, "aabbccddeeff", "old")
+	writeCapture(t, s, "2026-09-30", 12, 0, 0, "aabbccddeeff", "new")
+	writeCapture(t, s, "2026-09-30", 6, 30, 0, "112233445566", "mid")
+
+	day := time.Date(2026, 9, 30, 0, 0, 0, 0, time.Local)
+	photos, err := s.ListPhotos(day)
+	if err != nil {
+		t.Fatalf("ListPhotos: %v", err)
+	}
+	if len(photos) != 3 {
+		t.Fatalf("got %d photos, want 3", len(photos))
+	}
+	wantOrder := []string{"12-00-00", "06-30-00", "00-15-00"}
+	for i, want := range wantOrder {
+		if got := photos[i].Time.Format("15-04-05"); got != want {
+			t.Errorf("photos[%d] = %s, want %s (newest first)", i, got, want)
+		}
+	}
+}
+
+// Atomic writes (W1) drop a temp file into the day directory mid-write.
+// The gallery must never list one, and must never list any other junk.
+func TestStorage_ListPhotos_SkipsTempFilesAndJunk(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	s := NewStorage(root)
+	writeCapture(t, s, "2026-09-30", 12, 0, 0, "aabbccddeeff", "real")
+
+	dir := filepath.Join(root, "2026-09-30")
+	junk := []string{
+		".12-00-00_aabbccddeeff.jpg.tmp-9911", // the W1 atomic-write temp file
+		"00-15-00_aabbccddeeff.jpg.bak",       // valid prefix, wrong extension
+		"notes.txt",                           // not an image at all
+		"99-99-99_zzzzzzzzzzzz.jpg",           // impossible time, non-hex mac
+	}
+	for _, name := range junk {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o644); err != nil {
+			t.Fatalf("write junk %s: %v", name, err)
+		}
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "subdir"), 0o755); err != nil {
+		t.Fatalf("mkdir subdir: %v", err)
+	}
+
+	day := time.Date(2026, 9, 30, 0, 0, 0, 0, time.Local)
+	photos, err := s.ListPhotos(day)
+	if err != nil {
+		t.Fatalf("ListPhotos: %v", err)
+	}
+	if len(photos) != 1 {
+		var names []string
+		for _, p := range photos {
+			names = append(names, p.Name)
+		}
+		t.Fatalf("ListPhotos = %v, want only the one real capture", names)
+	}
+	if photos[0].Name != "12-00-00_aabbccddeeff.jpg" {
+		t.Errorf("Name = %q, want the real capture", photos[0].Name)
+	}
+}
+
+func TestStorage_ListPhotos_EmptyDayIsEmptySliceNotNil(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	s := NewStorage(root)
+	writeCapture(t, s, "2026-09-30", 12, 0, 0, "aabbccddeeff", "x")
+
+	day := time.Date(2026, 10, 1, 0, 0, 0, 0, time.Local)
+	photos, err := s.ListPhotos(day)
+	if err != nil {
+		t.Fatalf("ListPhotos: %v", err)
+	}
+	if photos == nil {
+		t.Fatal("ListPhotos = nil, want empty slice (it would marshal to JSON null)")
+	}
+	if len(photos) != 0 {
+		t.Errorf("ListPhotos = %v, want empty", photos)
+	}
+}
+
+func TestStorage_ListPhotos_UnreadableFileIsSkippedNotFatal(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	s := NewStorage(root)
+	writeCapture(t, s, "2026-09-30", 12, 0, 0, "aabbccddeeff", "real")
+
+	// A file that disappears between the directory read and the Stat
+	// must not take down the whole listing.
+	dir := filepath.Join(root, "2026-09-30")
+	victim := filepath.Join(dir, "13-00-00_112233445566.jpg")
+	if err := os.WriteFile(victim, []byte("gone soon"), 0o644); err != nil {
+		t.Fatalf("write victim: %v", err)
+	}
+	if err := os.Remove(victim); err != nil {
+		t.Fatalf("remove victim: %v", err)
+	}
+
+	day := time.Date(2026, 9, 30, 0, 0, 0, 0, time.Local)
+	photos, err := s.ListPhotos(day)
+	if err != nil {
+		t.Fatalf("ListPhotos: %v", err)
+	}
+	if len(photos) != 1 {
+		t.Errorf("ListPhotos returned %d photos, want 1", len(photos))
+	}
+}
+
+// Deleting the last photo of a day leaves an empty directory behind.
+// The calendar must not then show a permanent blank cell for it.
+func TestStorage_ListDays_SkipsDaysWithNoCapturesLeft(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	s := NewStorage(root)
+	writeCapture(t, s, "2026-09-30", 12, 0, 0, "aabbccddeeff", "x")
+
+	empty := filepath.Join(root, "2026-10-01")
+	if err := os.MkdirAll(empty, 0o755); err != nil {
+		t.Fatalf("mkdir empty day: %v", err)
+	}
+	// Only junk inside it — still not a day with captures.
+	if err := os.WriteFile(filepath.Join(empty, "leftover.tmp"), []byte("x"), 0o644); err != nil {
+		t.Fatalf("write leftover: %v", err)
+	}
+
+	got, err := s.ListDays()
+	if err != nil {
+		t.Fatalf("ListDays: %v", err)
+	}
+	if len(got) != 1 || got[0] != "2026-09-30" {
+		t.Errorf("ListDays = %v, want only [2026-09-30]", got)
 	}
 }
 
