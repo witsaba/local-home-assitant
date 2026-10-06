@@ -1006,6 +1006,33 @@ a:hover { color: var(--color-accent-hover); }
   color: var(--color-fg-muted);
 }
 
+/* Actions cluster: download + close, side by side. */
+.gallery-lightbox__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-shrink: 0;
+}
+
+/* Download button: matches the close button visually but is an anchor so
+   the browser handles the download natively. No framework needed. */
+.gallery-lightbox__download {
+  min-width: 44px;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-2);
+  background: var(--color-surface);
+  color: var(--color-fg);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.gallery-lightbox__download:hover { background: var(--color-surface-hover); }
+
 .gallery-lightbox__close {
   min-width: 44px;
   min-height: 44px;
@@ -1046,6 +1073,16 @@ a:hover { color: var(--color-accent-hover); }
 /* Hidden rather than removed when a moment has a single frame, so the
    caption row does not reflow as the operator arrows through a day. */
 .gallery-lightbox__nav[hidden] { display: none; }
+
+/* ---- panel header controls ----------------------------------------------- */
+
+/* Right-aligned area in the panel head for contextual actions. */
+.gallery-controls__right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
 
 /* ---- responsive ----------------------------------------------------------- */
 @media (max-width: 640px) {

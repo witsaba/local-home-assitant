@@ -397,3 +397,37 @@ func ImageURL(date, tick, mac string) string {
 func ThumbURL(date, tick, mac string, width int) string {
 	return "/api/gallery/thumb?date=" + date + "&t=" + tick + "&mac=" + mac + "&w=" + strconv.Itoa(width)
 }
+
+// ErrDayNotFound is returned by RemoveDay when the requested date folder does
+// not exist. It is distinct from a permission error so the handler can return
+// a 404 rather than a 500.
+var ErrDayNotFound = fmt.Errorf("day folder not found")
+
+// RemoveDay deletes the entire capture folder for one date, including its
+// thumbnail cache.
+//
+// The date is validated so no caller-supplied string reaches the filesystem.
+// Lstat confirms the path exists before RemoveAll; a non-existent path is a
+// 404, not a 500. The withinRoot check is a belt-and-braces guard against
+// any future callers that bypass the date validation.
+func (s *Store) RemoveDay(date string) error {
+	if err := ValidateDate(date); err != nil {
+		return err
+	}
+	p := filepath.Join(s.root, date)
+	if !withinRoot(s.root, p) {
+		return fmt.Errorf("resolved path escapes the capture root")
+	}
+	// Lstat, not Stat: a symlink to a day folder must not be followed, and
+	// EvalSymlinks on p is already covered by withinRoot above.
+	if _, err := os.Lstat(p); err != nil {
+		if os.IsNotExist(err) {
+			return ErrDayNotFound
+		}
+		return fmt.Errorf("checking day %q: %w", date, err)
+	}
+	if err := os.RemoveAll(p); err != nil {
+		return fmt.Errorf("removing day %q: %w", date, err)
+	}
+	return nil
+}

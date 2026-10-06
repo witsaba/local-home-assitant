@@ -15,12 +15,17 @@
   /* ---------------------------------------------------------------------------
      api(path, options)
 
-     Fetch a JSON endpoint with a hard timeout. Returns parsed JSON, or throws
-     an Error with a message worth showing an operator.
+     Fetch an endpoint with a hard timeout. By default it parses JSON and
+     returns the parsed object. Pass { raw: true } to get the raw Response
+     object instead (useful for 204 No Content). Pass { method: "DELETE" }
+     for non-GET requests.
+
+     Throws an Error with a message worth showing an operator on failure.
      ------------------------------------------------------------------------ */
   function api(path, options) {
     var opts = options || {};
     var timeoutMs = opts.timeoutMs || 5000;
+    var method = opts.method || "GET";
     var controller =
       typeof AbortController !== "undefined" ? new AbortController() : null;
     var timer = null;
@@ -32,13 +37,21 @@
     }
 
     return fetch(path, {
+      method: method,
       signal: controller ? controller.signal : undefined,
       cache: "no-store",
-      headers: { Accept: "application/json" },
+      headers: method === "GET"
+        ? { Accept: "application/json" }
+        : { "Content-Type": "application/json" },
     })
       .then(function (res) {
         if (!res.ok) {
           throw new Error("API returned " + res.status + " " + res.statusText);
+        }
+        if (opts.raw) return res;
+        // 204 No Content has no body; avoid an empty-json parse error.
+        if (res.status === 204 || res.headers.get("Content-Length") === "0") {
+          return null;
         }
         return res.json();
       })

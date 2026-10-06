@@ -354,7 +354,8 @@ test("tick times are reformatted as strings and never timezone-shifted", async (
     await settle();
     const host = doc.getElementById("gallery-host");
     const times = host.querySelectorAll("gallery-moment__time").map((n) => n.textContent);
-    assert.deepEqual(times, ["14:30:00", "14:45:00"]);
+    // Times are reformatted to 12-hour AM/PM: 14-30-00 → "2:30 PM", 14-45-00 → "2:45 PM".
+    assert.deepEqual(times, ["2:30 PM", "2:45 PM"]);
     assert.match(doc.getElementById("day-summary").textContent, /^2026-10-05/);
   } finally {
     if (prev === undefined) delete process.env.TZ;

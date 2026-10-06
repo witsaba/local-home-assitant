@@ -58,6 +58,7 @@ func NewHandler(repo devices.DeviceRepository, store *gallery.Store, log ports.L
 	h.mux.HandleFunc("GET /api/devices/active", h.listActive)
 	h.mux.HandleFunc("GET /api/gallery/days", h.galleryDays)
 	h.mux.HandleFunc("GET /api/gallery/day", h.galleryDay)
+	h.mux.HandleFunc("DELETE /api/gallery/day", h.deleteGalleryDay)
 	h.mux.HandleFunc("GET /api/gallery/img", h.galleryImage)
 	h.mux.HandleFunc("GET /api/gallery/thumb", h.galleryThumb)
 	return h
@@ -405,4 +406,47 @@ func (h *Handler) cameraNames(r *http.Request) (map[string]string, error) {
 		names[d.MAC] = d.Name
 	}
 	return names, nil
+}
+
+// deleteGalleryDay handles DELETE /api/gallery/day?date=YYYY-MM-DD.
+//
+// The date is validated before any path is used. A missing day is a 404, not
+// a 500, because the operator may have already deleted it manually. The
+// operation is permanent: there is no trash or undo, matching the design
+// decision recorded in the gallery ODD document.
+func (h *Handler) deleteGalleryDay(w http.ResponseWriter, r *http.Request) {
+	const route = "DELETE /api/gallery/day"
+	if h.galleryUnavailable(w, route) {
+		return
+	}
+
+	date := r.URL.Query().Get("date")
+	if err := gallery.ValidateDate(date); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": err.Error(),
+		})
+		return
+	}
+
+	if err := h.store.RemoveDay(date); err != nil {
+		if errors.Is(err, gallery.ErrDayNotFound) {
+			h.log.Warn("DELETE /api/gallery/day: day not found",
+				ports.Field{Key: "date", Value: date},
+			)
+			writeJSON(w, http.StatusNotFound, map[string]string{
+				"error": "no such day",
+			})
+			return
+		}
+		h.log.Error("DELETE /api/gallery/day: RemoveDay failed",
+			ports.Field{Key: "date", Value: date},
+			ports.Field{Key: "err", Value: err.Error()},
+		)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{
+			"error": "could not remove that day",
+		})
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }

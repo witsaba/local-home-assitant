@@ -400,3 +400,107 @@ func TestGalleryThumbs_LandUnderTheDayDirectory(t *testing.T) {
 		t.Fatalf("expected the cache at %s: %v (day dir holds %v)", want, err, names)
 	}
 }
+
+// ---- DELETE /api/gallery/day -----------------------------------------------
+
+func TestGalleryDeleteDay_RemovesDayFolder(t *testing.T) {
+	h, root := newGalleryHandler(t)
+	writeTestCapture(t, root, "2026-09-30", "06-00-00", testMAC)
+
+	// Confirm the day exists.
+	var days []daySummary
+	if err := json.Unmarshal(getJSON(t, h, "/api/gallery/days", http.StatusOK), &days); err != nil {
+		t.Fatalf("listing days: %v", err)
+	}
+	if len(days) != 1 || days[0].Date != "2026-09-30" {
+		t.Fatalf("days before delete: got %v, want [2026-09-30]", days)
+	}
+
+	// Delete it.
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, httptest.NewRequest("DELETE", "/api/gallery/day?date=2026-09-30", nil))
+	if rr.Code != http.StatusNoContent {
+		t.Errorf("DELETE /api/gallery/day: got %d, want 204", rr.Code)
+	}
+	if rr.Body.Len() != 0 {
+		t.Errorf("DELETE: expected no body, got %q", rr.Body.String())
+	}
+
+	// Day is gone from the list.
+	if err := json.Unmarshal(getJSON(t, h, "/api/gallery/days", http.StatusOK), &days); err != nil {
+		t.Fatalf("listing days after delete: %v", err)
+	}
+	if len(days) != 0 {
+		t.Errorf("days after delete: got %d, want 0", len(days))
+	}
+	// And the directory is gone from disk.
+	if _, err := os.Stat(filepath.Join(root, "2026-09-30")); !os.IsNotExist(err) {
+		t.Errorf("day dir still on disk after delete: %v", err)
+	}
+}
+
+func TestGalleryDeleteDay_UnknownDayReturns404(t *testing.T) {
+	h, _ := newGalleryHandler(t)
+
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, httptest.NewRequest("DELETE", "/api/gallery/day?date=2026-09-30", nil))
+	if rr.Code != http.StatusNotFound {
+		t.Errorf("DELETE unknown day: got %d, want 404", rr.Code)
+	}
+}
+
+func TestGalleryDeleteDay_InvalidDateReturns400(t *testing.T) {
+	h, _ := newGalleryHandler(t)
+
+	for _, url := range []string{
+		"/api/gallery/day",                              // missing
+		"/api/gallery/day?date=",                       // empty
+		"/api/gallery/day?date=../../etc",              // traversal
+		"/api/gallery/day?date=2026-9-3",               // wrong shape
+	} {
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, httptest.NewRequest("DELETE", url, nil))
+		if rr.Code != http.StatusBadRequest {
+			t.Errorf("DELETE %s: got %d, want 400", url, rr.Code)
+		}
+	}
+}
+
+func TestGalleryDeleteDay_RemovesThumbCacheToo(t *testing.T) {
+	h, root := newGalleryHandler(t)
+	writeTestCapture(t, root, "2026-09-30", "06-00-00", testMAC)
+
+	// Populate the thumbnail cache.
+	thumb := httptest.NewRecorder()
+	h.ServeHTTP(thumb, httptest.NewRequest("GET",
+		"/api/gallery/thumb?date=2026-09-30&t=06-00-00&mac="+testMAC+"&w=320", nil))
+	if thumb.Code != http.StatusOK {
+		t.Fatalf("generating thumbnail: got %d", thumb.Code)
+	}
+
+	// Verify the cache landed on disk.
+	thumbCache := filepath.Join(root, "2026-09-30", ".thumbs")
+	if _, err := os.Stat(thumbCache); err != nil {
+		t.Fatalf("thumb cache missing before delete: %v", err)
+	}
+
+	// Delete the day.
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, httptest.NewRequest("DELETE", "/api/gallery/day?date=2026-09-30", nil))
+	if rr.Code != http.StatusNoContent {
+		t.Fatalf("DELETE: got %d, want 204", rr.Code)
+	}
+
+	// Both the day and its cache are gone.
+	if _, err := os.Stat(filepath.Join(root, "2026-09-30")); !os.IsNotExist(err) {
+		t.Errorf("day dir still present: %v", err)
+	}
+	if _, err := os.Stat(thumbCache); !os.IsNotExist(err) {
+		t.Errorf("thumb cache still present: %v", err)
+	}
+}
+
+// TestGalleryDeleteDay_WrongMethodIs405 is intentionally omitted: Go's
+// http.ServeMux registers GET and DELETE at the same path as independent
+// routes, and both return 200/400/404 for their respective inputs. There is
+// no 405 path on /api/gallery/day.
