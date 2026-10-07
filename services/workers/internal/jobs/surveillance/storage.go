@@ -374,3 +374,70 @@ func mustParseDay(name string) time.Time {
 	}
 	return t
 }
+
+// ErrDayNotFound is returned by RemoveDay when the requested day folder
+// does not exist. It is distinct from a permission error so the handler
+// can return a 404 rather than a 500.
+var ErrDayNotFound = errors.New("day folder not found")
+
+// RemoveDay deletes the entire capture folder for one day, including
+// any in-flight atomic-write temp files.
+//
+// The day is converted to its on-disk path through dayDir, which uses
+// the same date layout as ListDays and WriteFile, so the result is
+// always inside the capture root. Lstat (not Stat) is what stops a
+// symlink at the day path from being followed: a symlinked day is
+// reported as such and refused before any removal is attempted.
+//
+// EvalSymlinks on both sides is the belt-and-braces containment check:
+// the validated day path should already be under root, but a symlink
+// planted at the day path (caught by Lstat above) might still resolve
+// to somewhere outside, and the comparison must use the same kind of
+// resolved path on both sides.
+//
+// The thumbnail cache lives as a sibling "thumbs" directory of the
+// capture root, not inside the day folder, so it is NOT removed by
+// RemoveDay; thumbnails for deleted days become orphans that the next
+// access simply fails to regenerate. That is acceptable: a deleted day
+// has no photos to thumb, and the cache is bounded by the archive.
+//
+// Returns ErrDayNotFound when the day does not exist, so the handler
+// can answer 404 rather than 500.
+func (s Storage) RemoveDay(day time.Time) error {
+	if strings.TrimSpace(s.Root) == "" {
+		return errors.New("RemoveDay: empty root")
+	}
+	dir := s.dayDir(day)
+
+	// Lstat so a symlink is reported instead of followed. A day path
+	// that resolves to a file or to a symlink pointing somewhere else
+	// must not be removed.
+	info, err := os.Lstat(dir)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return ErrDayNotFound
+		}
+		return fmt.Errorf("RemoveDay: stat %s: %w", dir, err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("RemoveDay: %s is not a directory", dir)
+	}
+
+	// Belt-and-braces containment check.
+	realRoot, err := filepath.EvalSymlinks(s.Root)
+	if err != nil {
+		return fmt.Errorf("RemoveDay: resolve root: %w", err)
+	}
+	real, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return fmt.Errorf("RemoveDay: resolve %s: %w", dir, err)
+	}
+	if !strings.HasPrefix(real, realRoot+string(os.PathSeparator)) {
+		return fmt.Errorf("RemoveDay: %s escapes the capture root", real)
+	}
+
+	if err := os.RemoveAll(dir); err != nil {
+		return fmt.Errorf("RemoveDay: remove %s: %w", dir, err)
+	}
+	return nil
+}
