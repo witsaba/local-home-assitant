@@ -738,3 +738,149 @@ func seedJPEG(t *testing.T, root, day, name string) {
 		t.Fatalf("write %s: %v", name, err)
 	}
 }
+
+// ---- DELETE /api/gallery/day -----------------------------------------------
+
+// TestHandler_DeleteDay_RemovesTheFolder is the happy path: the day
+// exists in the archive, the operator confirms, and the entire folder
+// is gone from disk. The /api/gallery/days summary must reflect the
+// change immediately, because the next poll runs only on the next
+// visibility tick and a stale count would let the operator think their
+// click missed.
+func TestHandler_DeleteDay_RemovesTheFolder(t *testing.T) {
+	t.Parallel()
+
+	h, root := newTestHandler(t, map[string]int{"2026-10-06": 1})
+
+	rec := do(t, h, http.MethodDelete, "/api/gallery/day?date=2026-10-06")
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("DELETE /api/gallery/day: status = %d, want 204 (body %q)",
+			rec.Code, rec.Body.String())
+	}
+	if rec.Body.Len() != 0 {
+		t.Errorf("DELETE: expected no body, got %q", rec.Body.String())
+	}
+
+	// Day folder is gone from disk.
+	if _, err := os.Stat(filepath.Join(root, "2026-10-06")); !os.IsNotExist(err) {
+		t.Errorf("day folder still present: %v", err)
+	}
+
+	// And the days summary still lists the day but with count 0, so the
+	// week strip renders a cell for it. The whole-point of the listDays
+	// range response is to give the calendar a fixed-size grid.
+	rec = do(t, h, http.MethodGet, "/api/gallery/days?from=2026-10-01&to=2026-10-31")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /api/gallery/days: status = %d, body %q", rec.Code, rec.Body.String())
+	}
+	var days []map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &days); err != nil {
+		t.Fatalf("decode days: %v", err)
+	}
+	for _, d := range days {
+		if d["date"] == "2026-10-06" {
+			if c, _ := d["count"].(float64); c != 0 {
+				t.Errorf("deleted day in summary: got count = %v, want 0", d["count"])
+			}
+		}
+	}
+}
+
+// TestHandler_DeleteDay_UnknownDayIs404 covers the operator case: they
+// ask to delete a day that was already removed (manually or by a prior
+// request). 404 is honest, not 500, because the resource simply does
+// not exist any more.
+func TestHandler_DeleteDay_UnknownDayIs404(t *testing.T) {
+	t.Parallel()
+
+	h, _ := newTestHandler(t, nil)
+	rec := do(t, h, http.MethodDelete, "/api/gallery/day?date=2026-10-06")
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("DELETE unknown day: status = %d, want 404 (body %q)",
+			rec.Code, rec.Body.String())
+	}
+}
+
+// TestHandler_DeleteDay_RejectsMalformedDate covers the same hostile
+// inputs the read endpoints reject: traversal, absolute paths, empty
+// strings, and the wrong shape. A 400 is the right answer because the
+// client sent something it could have formatted correctly, and a 404
+// would send it looking for a day that never existed.
+func TestHandler_DeleteDay_RejectsMalformedDate(t *testing.T) {
+	t.Parallel()
+
+	h, _ := newTestHandler(t, map[string]int{"2026-10-06": 1})
+	cases := []string{
+		"/api/gallery/day",
+		"/api/gallery/day?date=",
+		"/api/gallery/day?date=../../etc",
+		"/api/gallery/day?date=/etc",
+		"/api/gallery/day?date=2026-9-6",
+		"/api/gallery/day?date=2026-13-45",
+	}
+	for _, target := range cases {
+		rec := do(t, h, http.MethodDelete, target)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("DELETE %s: status = %d, want 400 (body %q)",
+				target, rec.Code, rec.Body.String())
+		}
+	}
+}
+
+// TestHandler_DeleteDay_DoesNotAffectOtherDays is the safety guard: a
+// bad-day click must not take down a neighbour. The fixture seeds two
+// days; deleting one leaves the other intact.
+func TestHandler_DeleteDay_DoesNotAffectOtherDays(t *testing.T) {
+	t.Parallel()
+
+	h, root := newTestHandler(t, map[string]int{
+		"2026-10-06": 1,
+		"2026-10-05": 2,
+	})
+
+	rec := do(t, h, http.MethodDelete, "/api/gallery/day?date=2026-10-06")
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("DELETE 2026-10-06: status = %d, want 204", rec.Code)
+	}
+
+	// 2026-10-05 must still hold its two captures.
+	entries, err := os.ReadDir(filepath.Join(root, "2026-10-05"))
+	if err != nil {
+		t.Fatalf("read surviving day: %v", err)
+	}
+	count := 0
+	for _, e := range entries {
+		if !e.IsDir() {
+			count++
+		}
+	}
+	if count != 2 {
+		t.Errorf("surviving day: got %d files, want 2", count)
+	}
+}
+
+// TestHandler_DeleteDay_RefusesSymlinkedDay makes sure a symlink planted
+// at the day path is rejected. The Lstat gate in RemoveDay is what
+// catches this: a symlink to /tmp or anywhere else cannot be removed
+// through this endpoint, because RemoveDay refuses to touch anything
+// that is not actually a directory inside the root.
+func TestHandler_DeleteDay_RefusesSymlinkedDay(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	target := t.TempDir()
+	if err := os.Symlink(target, filepath.Join(root, "2026-10-06")); err != nil {
+		t.Fatalf("plant symlink: %v", err)
+	}
+
+	h := NewHandler(root, zap.NewNop())
+	rec := do(t, h, http.MethodDelete, "/api/gallery/day?date=2026-10-06")
+	if rec.Code == http.StatusNoContent {
+		t.Fatalf("DELETE on a symlinked day: status = 204, want non-204 (would delete %s)", target)
+	}
+
+	// The symlink target outside the root must still exist.
+	if _, err := os.Stat(target); err != nil {
+		t.Errorf("symlink target was removed: %v", err)
+	}
+}
