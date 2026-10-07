@@ -52,6 +52,7 @@ const (
 	RouteImage  = "/api/gallery/img"
 	RouteThumb  = "/api/gallery/thumb"
 	RoutePhoto  = "/api/gallery/photo"
+	RouteDeleteDay = "/api/gallery/day" // DELETE-only alias of RouteDay
 )
 
 // Handler serves the gallery API.
@@ -77,6 +78,7 @@ func NewHandler(root string, log *zap.Logger) *Handler {
 	h.mux.HandleFunc("GET "+RouteHealth, h.healthz)
 	h.mux.HandleFunc("GET "+RouteDays, h.listDays)
 	h.mux.HandleFunc("GET "+RouteDay, h.listDay)
+	h.mux.HandleFunc("DELETE "+RouteDeleteDay, h.deleteDay)
 	h.mux.HandleFunc("GET "+RouteImage, h.serveImage)
 	h.mux.HandleFunc("GET "+RouteThumb, h.serveThumb)
 	h.mux.HandleFunc("DELETE "+RoutePhoto, h.deletePhoto)
@@ -315,6 +317,43 @@ func (h *Handler) deletePhoto(w http.ResponseWriter, r *http.Request) {
 
 	h.log.Info("gallery: photo removed",
 		zap.String("date", day), zap.String("name", name))
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// deleteDay handles DELETE /api/gallery/day?date=YYYY-MM-DD.
+//
+// Removes the entire capture folder for one day, including all photos
+// in it and any in-flight atomic-write temp files. The operation is
+// permanent, matching the design decision recorded in the gallery
+// ODD document: there is no trash, no undo.
+//
+// The date is parsed through the same path as listDay, so the handler
+// returns 400 for a malformed date and 404 for a date whose folder is
+// no longer on disk (e.g. already deleted).
+func (h *Handler) deleteDay(w http.ResponseWriter, r *http.Request) {
+	day, err := parseDay(r.URL.Query().Get("date"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "date must be a single YYYY-MM-DD capture day")
+		return
+	}
+
+	if err := h.store.RemoveDay(day); err != nil {
+		if errors.Is(err, surveillance.ErrDayNotFound) {
+			h.log.Info("gallery: delete day not found",
+				zap.String("date", day.Format("2006-01-02")))
+			writeError(w, http.StatusNotFound, "no such day")
+			return
+		}
+		h.log.Error("gallery: RemoveDay failed",
+			zap.String("date", day.Format("2006-01-02")),
+			zap.Error(err))
+		writeError(w, http.StatusInternalServerError, "could not remove that day")
+		return
+	}
+
+	h.log.Info("gallery: day removed",
+		zap.String("date", day.Format("2006-01-02")))
 
 	w.WriteHeader(http.StatusNoContent)
 }

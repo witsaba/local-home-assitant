@@ -56,6 +56,11 @@
               <span class="status-chip__dot" aria-hidden="true"></span>
               <span data-status-label>checking</span>
             </span>
+            <div class="panel__head-actions" id="day-actions">
+              <!-- Delete day button is injected here by JS when a day
+                   has photos. The two-step inline confirmation lives in
+                   the same DOM region so it never covers unrelated UI. -->
+            </div>
           </div>
           <div class="panel__body panel__body--flush" id="photo-host">
             <p class="state">Loading&hellip;</p>
@@ -71,6 +76,26 @@
         <span id="last-updated"></span>
       </footer>
     </div>
+
+    <!-- Lightbox. The native <dialog> provides focus trapping, inert
+         background, and Escape-to-close for free, so the page does not
+         have to implement any of that. The Pi is a low-resource server;
+         keeping the overlay in the platform saves us a framework. -->
+    <dialog class="lightbox" id="lightbox" aria-label="Full-size photo">
+      <button class="lightbox__close" type="button" id="lb-close" aria-label="Close">
+        &times;
+      </button>
+      <figure class="lightbox__figure">
+        <img class="lightbox__img" id="lb-img" alt="" />
+        <figcaption class="lightbox__caption">
+          <span class="lightbox__caption-text" id="lb-caption"></span>
+          <a class="lightbox__download" id="lb-download" href="#" download>
+            <span aria-hidden="true">&#x2913;</span>
+            <span class="visually-hidden">Download</span>
+          </a>
+        </figcaption>
+      </figure>
+    </dialog>
 
     <script src="/assets/app.js"></script>
     <script>
@@ -143,10 +168,19 @@
           });
         }
 
+        /* clockOf returns a 12-hour AM/PM time, e.g. "2:30 PM". The server
+         * sends an RFC3339 timestamp that the worker stamps in local time,
+         * so new Date() on the parsed string is the worker's local time
+         * (and the browser's, since they are the same machine). AM/PM is
+         * a UI choice; the wire format stays ISO. */
         function clockOf(rfc3339) {
           var d = new Date(rfc3339);
           if (isNaN(d.getTime())) return "";
-          return pad(d.getHours()) + ":" + pad(d.getMinutes());
+          var h = d.getHours();
+          var ampm = h >= 12 ? "PM" : "AM";
+          var hour12 = h % 12;
+          if (hour12 === 0) hour12 = 12;
+          return hour12 + ":" + pad(d.getMinutes()) + " " + ampm;
         }
 
         function thumbUrl(day, name) {
@@ -200,6 +234,7 @@
 
             cell.addEventListener("click", function () {
               selected = d;
+              dayDeleteArmed = false;
               renderStrip(counts);
               loadDay();
             });
@@ -240,21 +275,36 @@
             decoding: "async",
           });
 
-          // A thumbnail that fails to generate still leaves the operator
-          // able to reach the original, so the tile links to it.
+          // The tile links to the full-size photo so the page still
+          // works without JS, but a click opens the lightbox instead of
+          // navigating. The link's href is the same URL the lightbox
+          // loads, so middle-click / right-click / new-tab still work
+          // and the download button is a real anchor pointing here.
+          var fullUrl =
+            "/api/gallery/img?date=" +
+            encodeURIComponent(day) +
+            "&name=" +
+            encodeURIComponent(p.name);
           var link = el(
             "a",
             {
               class: "photo-tile__link",
-              href:
-                "/api/gallery/img?date=" +
-                encodeURIComponent(day) +
-                "&name=" +
-                encodeURIComponent(p.name),
+              href: fullUrl,
               title: "Open the full-size photo",
             },
             [image]
           );
+          link.addEventListener("click", function (event) {
+            /* Modifier keys (cmd/ctrl/shift/middle-click) should follow
+             * the link normally, not open the lightbox in a modal. */
+            if (event.ctrlKey || event.metaKey || event.shiftKey || event.button !== 0) {
+              return;
+            }
+            event.preventDefault();
+            var caption =
+              when + " \u00b7 " + (p.mac || "camera") + " \u00b7 " + day;
+            openLightbox(fullUrl, caption, p.name);
+          });
 
           var remove = el("button", {
             class: "btn btn--danger photo-tile__remove",
@@ -379,6 +429,7 @@
                   "The worker captures every 15 minutes from each camera that answered recently. A day with nothing here means no camera answered, or the photos were removed."
                 );
                 updateChip(0, key);
+                renderDayActions(0);
                 return;
               }
 
@@ -392,6 +443,7 @@
                 )
               );
               updateChip(photos.length, key);
+              renderDayActions(photos.length);
             })
             .catch(function (err) {
               witsaba.showState(
@@ -441,6 +493,144 @@
           selected = today();
           refresh();
         });
+
+        /* ---------------------------------------------------------------------
+           Lightbox
+           ------------------------------------------------------------------- */
+
+        /* Native <dialog> gives us focus trapping, inert background, and
+         * Escape-to-close for free. We only handle open/close and the
+         * caption. The Pi is a 1GB box, so keeping the overlay in the
+         * platform saves a framework. */
+        var lightbox = document.getElementById("lightbox");
+        var lbImg = document.getElementById("lb-img");
+        var lbCaption = document.getElementById("lb-caption");
+        var lbDownload = document.getElementById("lb-download");
+        var lbClose = document.getElementById("lb-close");
+
+        function openLightbox(src, caption, downloadName) {
+          lbImg.src = src;
+          lbImg.alt = "Captured at " + caption;
+          lbCaption.textContent = caption;
+          lbDownload.href = src;
+          lbDownload.setAttribute("download", downloadName);
+          if (typeof lightbox.showModal === "function" && !lightbox.open) {
+            lightbox.showModal();
+          }
+        }
+
+        function closeLightbox() {
+          if (typeof lightbox.close === "function" && lightbox.open) {
+            lightbox.close();
+          }
+          /* Drop the bytes. A day can hold hundreds of frames and a
+           * held full image is the only thing on this page that
+           * approaches a memory ceiling on a phone browser. */
+          lbImg.removeAttribute("src");
+        }
+
+        lbClose.addEventListener("click", closeLightbox);
+
+        /* Click on the backdrop (the dialog itself, outside the figure)
+         * closes; a click inside the figure must not. */
+        lightbox.addEventListener("click", function (event) {
+          if (event.target === lightbox) closeLightbox();
+        });
+
+        /* ---------------------------------------------------------------------
+           Day deletion
+           ------------------------------------------------------------------- */
+
+        /* Delete state. The two-step inline confirmation lives in the same
+         * DOM region as the button so it never covers the photo grid. */
+        var dayActions = document.getElementById("day-actions");
+        var dayDeleteArmed = false;
+
+        function renderDayActions(photoCount) {
+          if (!photoCount || photoCount === 0) {
+            dayDeleteArmed = false;
+            dayActions.replaceChildren();
+            return;
+          }
+
+          if (!dayDeleteArmed) {
+            var btn = el("button", {
+              class: "btn btn--danger",
+              type: "button",
+              text: "Delete day",
+              "aria-label": "Delete all photos on " + dateKey(selected),
+            });
+            btn.addEventListener("click", function () {
+              dayDeleteArmed = true;
+              renderDayActions(photoCount);
+            });
+            dayActions.replaceChildren(btn);
+            return;
+          }
+
+          var confirm = el("button", {
+            class: "btn btn--danger",
+            type: "button",
+            text: "Confirm delete",
+            "aria-label": "Confirm permanent deletion of " + dateKey(selected),
+          });
+          var cancel = el("button", {
+            class: "btn",
+            type: "button",
+            text: "Cancel",
+          });
+
+          confirm.addEventListener("click", function () {
+            confirm.disabled = true;
+            cancel.disabled = true;
+            confirm.textContent = "Deleting\u2026";
+            var target = dateKey(selected);
+            witsaba
+              .api("/api/gallery/day?date=" + encodeURIComponent(target), {
+                method: "DELETE",
+                timeoutMs: 10000,
+              })
+              .then(function () {
+                dayDeleteArmed = false;
+                /* The week strip will count the day as 0 on the next
+                 * poll. The day view itself becomes empty in the
+                 * meantime, so a reload is not needed. */
+                witsaba.showState(
+                  photoHost,
+                  "empty",
+                  "Day removed",
+                  "All photos for " + target + " have been deleted. The day will show as empty in the calendar after the next refresh."
+                );
+                dayActions.replaceChildren();
+                witsaba.setStatus(chip, "warning", "no photos", false);
+                subtitle.textContent = "no photos";
+                dayLabel.textContent = shortDate(selected);
+                lastUpdated.textContent = "updated " + new Date().toLocaleTimeString();
+                /* Refresh the week strip so the cell for this day shows
+                 * the new count without waiting for the next poll. */
+                loadWeek();
+              })
+              .catch(function (err) {
+                confirm.disabled = false;
+                cancel.disabled = false;
+                confirm.textContent = "Confirm delete";
+                witsaba.setStatus(
+                  chip,
+                  "error",
+                  "delete failed: " + err.message,
+                  true
+                );
+              });
+          });
+
+          cancel.addEventListener("click", function () {
+            dayDeleteArmed = false;
+            renderDayActions(photoCount);
+          });
+
+          dayActions.replaceChildren(confirm, cancel);
+          confirm.focus();
+        }
 
         witsaba.onVisible(refresh, 15000);
       })();
